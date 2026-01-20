@@ -1,5 +1,6 @@
 import os
 import glob
+import json
 import argparse
 
 import torch
@@ -270,6 +271,12 @@ if __name__ == "__main__":
         default=-1,
         help="The seed to use during inference, negative value means no seed",
     )
+    parser.add_argument(
+        "--json_file",
+        type=str,
+        default=None,
+        help="Path to a JSON file containing a list of samples to process. If provided, only these samples will be used for inference.",
+    )
     args = parser.parse_args()
 
     # load the model
@@ -288,7 +295,43 @@ if __name__ == "__main__":
     if os.path.isfile(args.point_cloud):
         point_cloud_files = [args.point_cloud]
     else:
-        point_cloud_files = glob.glob(os.path.join(args.point_cloud, "*.ply"))
+        # if json_file is provided, only process samples specified in the json
+        if args.json_file is not None:
+            print(f"Loading samples from JSON file: {args.json_file}")
+            with open(args.json_file, "r") as f:
+                json_data = json.load(f)
+            
+            point_cloud_files = []
+            for item in json_data:
+                # Extract filename(s) from string, dict, or list
+                pcd_files = []
+                if isinstance(item, str):
+                    pcd_files = [item]
+                elif isinstance(item, dict):
+                    # Try common keys
+                    value = (item.get("point_clouds") or item.get("point_cloud") or 
+                            item.get("file_name") or item.get("pcd_file") or 
+                            item.get("scene_id") or item.get("id"))
+                    # Handle both list and string values
+                    pcd_files = value if isinstance(value, list) else [value] if value else []
+                
+                for pcd_file in pcd_files:
+                    # Remove "pcd/" prefix if present (since we're already using args.point_cloud)
+                    pcd_file = pcd_file.replace("pcd/", "")
+                    # Add .ply extension if missing
+                    if not pcd_file.endswith(".ply"):
+                        pcd_file = f"{pcd_file}.ply"
+                    
+                    full_path = os.path.join(args.point_cloud, pcd_file)
+                    if os.path.exists(full_path):
+                        point_cloud_files.append(full_path)
+                    else:
+                        print(f"Warning: Point cloud file not found: {full_path}")
+            
+            print(f"Found {len(point_cloud_files)} samples from JSON file")
+        else:
+            # Process all .ply files in the directory
+            point_cloud_files = glob.glob(os.path.join(args.point_cloud, "*.ply"))
 
     for point_cloud_file in tqdm(point_cloud_files):
         # load the point cloud
