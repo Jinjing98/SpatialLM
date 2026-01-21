@@ -1,6 +1,7 @@
 #!/bin/bash
 # cd /mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialLM
 DATA_ROOT='/data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm/'
+DATA_ROOT='/mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm/'
 
 python inference.py \
 --point_cloud ${DATA_ROOT}pcd/40753679.ply \
