@@ -283,16 +283,29 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable FlashAttention (required for V100 or older GPUs)",
     )
+    parser.add_argument(
+        "--VLM_PE",
+        type=str,
+        default=None,
+        choices=[None, "CCA_2DProj"],
+        help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection",
+    )
     args = parser.parse_args()
 
     # load the model
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     
-    if args.disable_flash_attn:
+    # Check if we need to modify config
+    if args.disable_flash_attn or args.VLM_PE is not None:
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
-        if hasattr(config, 'point_config'):
-            config.point_config['enable_flash'] = False
+        # Disable flash attention if requested
+        if args.disable_flash_attn:
+            if hasattr(config, 'point_config'):
+                config.point_config['enable_flash'] = False
+        # Set VLM_PE if specified
+        if args.VLM_PE is not None:
+            config.VLM_PE = args.VLM_PE
         model = AutoModelForCausalLM.from_pretrained(
             args.model_path, 
             config=config,

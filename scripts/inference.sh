@@ -3,15 +3,26 @@
 DATA_ROOT='/data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm/'
 DATA_ROOT='/mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm/'
 
+# suggest not to disble, as sonata was trained with enable. Performance will slightly diff.
+#--disable_flash_attn \
 python inference.py \
 --point_cloud ${DATA_ROOT}pcd/40753679.ply \
 --output outputs/scene40753679.txt \
 --model_path manycore-research/SpatialLM1.1-Qwen-0.5B \
 --model_path ysmao/SpatialLM1.1-Qwen-0.5B-Structured3D-SFT \
---disable_flash_attn
+--model_path ysmao/SpatialLM1.1-Qwen-0.5B-Arkitscenes-SFT \
+--VLM_PE "CCA_2DProj" \
+--disable_flash_attn \
 
 # # # Convert the predicted layout to Rerun format
-# python visualize.py \
-# --point_cloud ${DATA_ROOT}pcd/40753679.ply \
-# --layout outputs/scene40753679.txt \
-# --save outputs/scene40753679.rrd
+# run below on my local 
+python visualize.py \
+--point_cloud ${DATA_ROOT}pcd/40753679.ply \
+--layout outputs/scene40753679.txt \
+--save outputs/scene40753679.rrd
+
+# vis result on local machine : workflow
+# (base) jinjingxu@G27LP0076-Linux:~$ pip install --upgrade rerun-sdk
+# (optional)
+# (base) jinjingxu@G27LP0076-Linux:~$ cp /mnt/cluster/workspaces/jinjingxu/proj/vlm/SpatialLM/outputs/scene40753679.rrd /tmp/test.rrd
+# (base) jinjingxu@G27LP0076-Linux:~$ rerun /tmp/test.rrd 

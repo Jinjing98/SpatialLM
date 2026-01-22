@@ -29,6 +29,19 @@ from spatiallm.model import PointBackboneType, ProjectorType
 IGNORE_INDEX = -100
 logger = logging.get_logger(__name__)
 
+# CCA utilities (only imported, no execution)
+try:
+    from spatiallm.model.cca_utils import (
+        build_concentric_position_matrix,
+        build_cca_position_ids,
+        build_cca_attention_mask,
+        project_pointcloud_to_2d_grid,
+        CCA_GRID_SIZE,
+    )
+    _CCA_AVAILABLE = True
+except ImportError:
+    _CCA_AVAILABLE = False
+
 
 class SpatialLMLlamaConfig(LlamaConfig):
     model_type = "spatiallm_llama"
@@ -95,6 +108,12 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
         self.point_end_token_id = self.config.point_end_token_id
         self.point_token_id = self.config.point_token_id
 
+        # CCA (Concentric Causal Attention) for VLM_PE
+        # Only initialize if VLM_PE is set to "CCA_2DProj"
+        if _CCA_AVAILABLE and getattr(self.config, 'VLM_PE', None) == "CCA_2DProj":
+            self._cca_concentric_pos = None  # Will be initialized on first use
+            self._point_cca_positions = None  # CCA position for each point
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -106,6 +125,30 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
         point_cloud = point_cloud[~nan_mask]
         coords = point_cloud[:, :3].int()
         feats = point_cloud[:, 3:].float()
+        
+        # === CCA: Compute 2D projection for point cloud tokens ===
+        if _CCA_AVAILABLE and getattr(self.config, 'VLM_PE', None) == "CCA_2DProj":
+            # feats[:, :3] contains normalized 3D coordinates in [0, 1]
+            # TODO: Verify that feats[:, :3] is in [X, Y, Z] order
+            grid_row, grid_col = project_pointcloud_to_2d_grid(
+                feats[:, :3],
+                grid_size=CCA_GRID_SIZE
+            )
+            
+            # Build concentric position matrix (cached for efficiency)
+            if self._cca_concentric_pos is None:
+                self._cca_concentric_pos = build_concentric_position_matrix(
+                    grid_size=CCA_GRID_SIZE,
+                    device=device
+                )
+            elif self._cca_concentric_pos.device != device:
+                # Move to correct device if needed
+                self._cca_concentric_pos = self._cca_concentric_pos.to(device)
+            
+            # Lookup CCA position ID for each point from 2D grid
+            self._point_cca_positions = self._cca_concentric_pos[grid_row, grid_col]
+        # ========================================================
+        
         if self.point_backbone_type == PointBackboneType.SCENESCRIPT:
             pc_sparse_tensor = torchsparse.SparseTensor(coords=coords, feats=feats)
             pc_sparse_tensor = sparse_collate([pc_sparse_tensor])  # batch_size = 1
@@ -291,6 +334,69 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
             assert (
                 attention_mask.shape[1] == inputs_embeds.shape[1]
             ), "The length of attention mask and inputs embeds should be the same"
+
+        # === CCA: Build CCA position IDs and attention mask ===
+        # Apply CCA (Concentric Causal Attention) if VLM_PE="CCA_2DProj"
+        # This extends the 2D image CCA from modelling_fca_Feng.py to 3D point clouds
+        # by projecting point cloud tokens onto a 2D plane (top-down view)
+        # IMPORTANT: Only apply during prefill (past_key_values is None), not during decoding
+        if (_CCA_AVAILABLE and 
+            getattr(self.config, 'VLM_PE', None) == "CCA_2DProj" and 
+            point_clouds is not None and 
+            past_key_values is None):
+            num_point_tokens = self._point_cca_positions.shape[0]
+            batch_point_token_pos = []
+            batch_cca_position_ids = []
+            
+            # Build CCA position IDs for each sample in batch
+            for cur_input_ids in input_ids:
+                point_start_pos = torch.where(
+                    cur_input_ids == self.config.point_start_token_id
+                )[0]
+                
+                if len(point_start_pos) > 0:
+                    # This sample has point cloud
+                    point_start_pos = point_start_pos[0].item()
+                    batch_point_token_pos.append(point_start_pos)
+                    
+                    # Build CCA position IDs for this sample
+                    cca_pos_ids = build_cca_position_ids(
+                        position_ids=position_ids[0] if position_ids is not None else None,
+                        point_token_pos=point_start_pos,
+                        num_point_tokens=num_point_tokens,
+                        concentric_pos=self._cca_concentric_pos,
+                        device=inputs_embeds.device,
+                        seq_len=inputs_embeds.shape[1],  # After embedding fusion
+                        past_key_values=past_key_values
+                    )
+                    batch_cca_position_ids.append(cca_pos_ids.unsqueeze(0))
+                else:
+                    # Text-only sample (no point cloud)
+                    batch_point_token_pos.append(-1)
+                    batch_cca_position_ids.append(
+                        torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device).unsqueeze(0)
+                    )
+            
+            # Stack batch
+            batch_cca_position_ids = torch.cat(batch_cca_position_ids, dim=0)
+            
+            # Build CCA attention mask
+            cca_attention_mask = build_cca_attention_mask(
+                attention_mask=attention_mask,
+                batch_point_token_pos=batch_point_token_pos,
+                batch_cca_position_ids=batch_cca_position_ids,
+                num_point_tokens=num_point_tokens,
+                batch_size=inputs_embeds.shape[0],
+                seq_len=inputs_embeds.shape[1],
+                device=inputs_embeds.device,
+                dtype=inputs_embeds.dtype,
+                grid_size=CCA_GRID_SIZE
+            )
+            
+            # Use CCA position IDs and mask
+            position_ids = batch_cca_position_ids
+            attention_mask = cca_attention_mask
+        # =====================================================
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
