@@ -833,12 +833,16 @@ class Sonata(PointModule, PyTorchModelHubMixin):
     ):
         super().__init__()
 
-        print(f"Enable flash: {enable_flash} in sonata encoder.")
+        print(f"There are 2 PE in Sonata Model:")
+        print(f"Enc stage:")
+        print(f"Enable flash attention: {enable_flash}. Enable RPE: {enable_rpe}.")
         if enable_rpe and not enable_flash:
             # only possible in naive attn
             print(f"Apply RPE in SerializedAttention.")
         else:
             print(f"Apply APE in SerializedAttention")
+        print(f"Input_proj stage:")
+        print(f"Enable Fourier Encode: {enable_fourier_encode}.")
 
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
