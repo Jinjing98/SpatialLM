@@ -277,13 +277,32 @@ if __name__ == "__main__":
         default=None,
         help="Path to a JSON file containing a list of samples to process. If provided, only these samples will be used for inference.",
     )
+    parser.add_argument(
+        "--disable_flash_attn",
+        default=False,
+        action="store_true",
+        help="Disable FlashAttention (required for V100 or older GPUs)",
+    )
     args = parser.parse_args()
 
     # load the model
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=getattr(torch, args.inference_dtype)
-    )
+    
+    if args.disable_flash_attn:
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
+        if hasattr(config, 'point_config'):
+            config.point_config['enable_flash'] = False
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_path, 
+            config=config,
+            torch_dtype=getattr(torch, args.inference_dtype)
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            torch_dtype=getattr(torch, args.inference_dtype)
+        )
     model.to("cuda")
     model.set_point_backbone_dtype(torch.float32)
     model.eval()

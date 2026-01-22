@@ -72,6 +72,8 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
                 enc_mode=point_config["enc_mode"],
                 enable_fourier_encode=True,
                 num_bins=point_config["num_bins"],
+                enable_flash=point_config.get("enable_flash", True),
+                enable_rpe=point_config.get("enable_rpe", False),
             )
             embed_channels = point_config["enc_channels"][-1]
         else:

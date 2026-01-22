@@ -356,6 +356,12 @@ class SerializedAttention(PointModule):
         self.proj_drop = torch.nn.Dropout(proj_drop)
         self.softmax = torch.nn.Softmax(dim=-1)
         self.rpe = RPE(patch_size, num_heads) if self.enable_rpe else None
+        print(f"Enable flash: {self.enable_flash} in sonata encoder.")
+        if self.enable_rpe and not self.enable_flash:
+            # only possible in naive attn
+            print(f"Apply RPE in SerializedAttention.")
+        else:
+            print(f"Apply APE in SerializedAttention")
 
     @torch.no_grad()
     def get_rel_pos(self, point, order):
@@ -923,7 +929,7 @@ class Sonata(PointModule, PyTorchModelHubMixin):
         point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
 
-        point = self.enc(point)
+        point = self.enc(point) # internal PE in Block (Sonata Encoder)
         context = point["sparse_conv_feat"].features
 
         if self.enable_fourier_encode:
