@@ -284,28 +284,53 @@ if __name__ == "__main__":
         help="Disable FlashAttention (required for V100 or older GPUs)",
     )
     parser.add_argument(
-        "--VLM_PE",
+        "--vlm_pe",
         type=str,
         default=None,
-        choices=[None, "CCA_2DProj"],
-        help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection",
+        choices=[None, "CCA_2DProj", "3D_RoPE", "3D_Sinusoidal"],
+        help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection, 3D_RoPE: 3D Rotary Position Embedding, 3D_Sinusoidal: 3D Sinusoidal Position Embedding",
     )
+    parser.add_argument(
+        "--pcd_pe_merge_rule",
+        type=str,
+        default="3D_only",
+        choices=["3D_only", "3D_with_1D"],
+        help="The merge rule for the PCD PE. 3D_only: only 3D RoPE, 3D_with_1D: 3D RoPE and 1D RoPE",
+    )
+
+
     args = parser.parse_args()
 
     # load the model
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     
     # Check if we need to modify config
-    if args.disable_flash_attn or args.VLM_PE is not None:
+    if args.disable_flash_attn or args.vlm_pe is not None:
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
         # Disable flash attention if requested
         if args.disable_flash_attn:
             if hasattr(config, 'point_config'):
                 config.point_config['enable_flash'] = False
-        # Set VLM_PE if specified
-        if args.VLM_PE is not None:
-            config.VLM_PE = args.VLM_PE
+        # Set vlm_pe: Override model's config with command line argument
+        # If args.vlm_pe is explicitly set, use it (even if it's "None")
+        # This allows overriding the model's default vlm_pe
+        if args.vlm_pe is not None:
+            # Handle string "None" to explicitly disable vlm_pe
+            if args.vlm_pe in ["None", "none"]:
+                config.vlm_pe = None
+                print(f"[Config] vlm_pe = None (explicitly disabled via command line)")
+            else:
+                config.vlm_pe = args.vlm_pe
+                print(f"[Config] vlm_pe = {config.vlm_pe} (from command line)")
+        else:
+            # Use model's default vlm_pe
+            current_vlm_pe = getattr(config, 'vlm_pe', None)
+            print(f"[Config] vlm_pe = {current_vlm_pe} (from model config - no command line override)")
+        
+        # Set pcd_pe_merge_rule: Pass through config (similar to vlm_pe)
+        config.pcd_pe_merge_rule = args.pcd_pe_merge_rule
+        print(f"[Config] pcd_pe_merge_rule = {config.pcd_pe_merge_rule}")
         model = AutoModelForCausalLM.from_pretrained(
             args.model_path, 
             config=config,
@@ -315,7 +340,7 @@ if __name__ == "__main__":
         model = AutoModelForCausalLM.from_pretrained(
             args.model_path,
             torch_dtype=getattr(torch, args.inference_dtype)
-        )
+    )
     model.to("cuda")
     model.set_point_backbone_dtype(torch.float32)
     model.eval()

@@ -946,4 +946,10 @@ class Sonata(PointModule, PyTorchModelHubMixin):
             context = torch.cat([context, encoded_coords], dim=-1)
             context = self.input_proj(context)
 
-        return context
+        # Return both encoded features and patch center coordinates
+        # point.coord contains the mean coordinates of each patch (computed during pooling)
+        # These are the actual semantic centers of the encoded patches
+        return {
+            "features": context,
+            "patch_coords": point.coord  # (num_patches, 3) - actual patch centers
+        }
