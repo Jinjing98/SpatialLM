@@ -454,35 +454,26 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                     # Use maximum range across all dimensions to preserve aspect ratio
                     max_range = coord_range.max()  # Scalar: largest dimension range
 
-                    print('*'*10)
-                    print('hasattr(self, "_point_patch_coords"): ', hasattr(self, '_point_patch_coords'))
-                    print('self._point_patch_coords.shape: ', self._point_patch_coords.shape)
-                    print('patch_coords shape: ', patch_coords.shape)
-                    print('min max patch_coords: ',patch_coords.min(dim=0, keepdim=True), patch_coords.max(dim=0, keepdim=True))
-                    print('*'*10)
-                    
 
-                    logger.info(
-                        f"[3D PE] Original patch_coords range: "
-                        f"X=[{coord_min_val[0,0].item():.3f}, {coord_max_val[0,0].item():.3f}], "
-                        f"Y=[{coord_min_val[0,1].item():.3f}, {coord_max_val[0,1].item():.3f}], "
-                        f"Z=[{coord_min_val[0,2].item():.3f}, {coord_max_val[0,2].item():.3f}]"
-                    )
+                    # logger.info(
+                    #     f"[3D PE] Original patch_coords range: "
+                    #     f"X=[{coord_min_val[0,0].item():.3f}, {coord_max_val[0,0].item():.3f}], "
+                    #     f"Y=[{coord_min_val[0,1].item():.3f}, {coord_max_val[0,1].item():.3f}], "
+                    #     f"Z=[{coord_min_val[0,2].item():.3f}, {coord_max_val[0,2].item():.3f}]"
+                    # )
                     
                     # Normalize with same scale for all dimensions (preserves spatial relationships)
                     patch_coords = (patch_coords - coord_min_val) / (max_range + 1e-8)
                     
-                    logger.info(
-                        f"[3D PE] Normalized with max_range={max_range.item():.3f}, "
-                        f"final range: X=[{patch_coords[:,0].min().item():.3f}, {patch_coords[:,0].max().item():.3f}], "
-                        f"Y=[{patch_coords[:,1].min().item():.3f}, {patch_coords[:,1].max().item():.3f}], "
-                        f"Z=[{patch_coords[:,2].min().item():.3f}, {patch_coords[:,2].max().item():.3f}]"
-                    )
+                    # logger.info(
+                    #     f"[3D PE] Normalized with max_range={max_range.item():.3f}, "
+                    #     f"final range: X=[{patch_coords[:,0].min().item():.3f}, {patch_coords[:,0].max().item():.3f}], "
+                    #     f"Y=[{patch_coords[:,1].min().item():.3f}, {patch_coords[:,1].max().item():.3f}], "
+                    #     f"Z=[{patch_coords[:,2].min().item():.3f}, {patch_coords[:,2].max().item():.3f}]"
+                    # )
                     
                     # Compute 3D RoPE if needed (returns (N, head_dim) for per-head application)
                     if self.rotary_emb_3d is not None:
-                        print(f"\n[3D_RoPE] Computing 3D RoPE for {patch_coords.shape[0]} patches...")
-                        print(f"[3D_RoPE] Merge rule: {self.rotary_emb_3d.merge_rule}")
                         
                         # Compute position_ids for point tokens (needed for "3D_with_1D" mode)
                         # We'll set these later when we know the actual sequence positions
@@ -492,10 +483,6 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                             self._point_patch_coords_for_rope = patch_coords
                             # We need position_ids which we'll get from point_token_positions
                             # For now, use placeholder (will be recomputed in forward with real position_ids)
-                            logger.warning(
-                                "[3D_RoPE] TODO: merge_rule='3D_with_1D' currently uses sequence position for 1D component. "
-                                "This should be reviewed to ensure correct positional encoding behavior."
-                            )
                             # Create position_ids based on point token sequence positions
                             # We'll do this properly below after _point_token_positions is set
                             pass
@@ -505,7 +492,6 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                             cos_3d, sin_3d = self.rotary_emb_3d(patch_coords, seq_len=patch_coords.shape[0], position_ids=None)
                             self._point_3d_rope_cos = cos_3d  # (num_patches, head_dim)
                             self._point_3d_rope_sin = sin_3d  # (num_patches, head_dim)
-                            print(f"[3D_RoPE] ✓ Computed cos_3d.shape={cos_3d.shape}, sin_3d.shape={sin_3d.shape}")
                             
                             # STRICT CHECK: Verify dimensions
                             expected_head_dim = self.config.hidden_size // self.config.num_attention_heads
@@ -521,17 +507,11 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                     
                     # Compute 3D Sinusoidal PE if needed
                     if hasattr(self, '_point_3d_sinusoidal_pe'):
-                        print(f"\n[3D_Sinusoidal] Computing PE for {patch_coords.shape[0]} patches...")
-                        print(f"[3D_Sinusoidal] Merge rule: {self.pcd_pe_merge_rule_sinusoidal}")
                         
                         if self.pcd_pe_merge_rule_sinusoidal == "3D_with_1D":
                             # Store patch_coords for later use with position_ids
                             self._point_patch_coords_for_sinusoidal = patch_coords
                             # Will compute later in forward() when we have position_ids
-                            logger.warning(
-                                "[3D_Sinusoidal] TODO: merge_rule='3D_with_1D' currently uses sequence position for 1D component. "
-                                "This should be reviewed to ensure correct positional encoding behavior."
-                            )
                             self._point_3d_sinusoidal_pe = None  # Will be computed later
                         else:  # "3D_only"
                             self._point_3d_sinusoidal_pe = compute_3d_sinusoidal_pe(
@@ -544,7 +524,6 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                                 merge_rule=self.pcd_pe_merge_rule_sinusoidal,
                                 position_ids=None
                             )  # (num_patches, hidden_size)
-                            print(f"[3D_Sinusoidal] ✓ Computed PE shape={self._point_3d_sinusoidal_pe.shape}")
             # =====================================================
             
             for cur_input_ids, cur_input_embeds, cur_attention_mask in zip(
@@ -640,15 +619,7 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                         # Create position_ids: [pt_start, pt_start+1, ..., pt_end-1]
                         position_ids_point = torch.arange(pt_start, pt_end, dtype=torch.long, device=inputs_embeds.device)
                         
-                        print(f"[3D_RoPE] Computing with position_ids for 3D_with_1D mode...")
-                        print(f"[3D_RoPE] Position IDs range: [{pt_start}, {pt_end}) -> {position_ids_point.shape}")
                         
-                        print('*'*10)
-                        print('RoPE_3D cos sin computation:')
-                        print('_point_patch_coords_for_rope.shape:', self._point_patch_coords_for_rope.shape)
-                        print('_point_patch_coords_for_rope[0]:', self._point_patch_coords_for_rope[0])
-                        print('seq_len:', self._point_patch_coords_for_rope.shape[0])
-                        print('position_ids_point.shape:', position_ids_point.shape, position_ids_point[0])
                         # Now compute 3D RoPE with position_ids
                         cos_3d, sin_3d = self.rotary_emb_3d(
                             self._point_patch_coords_for_rope,
@@ -657,7 +628,6 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                         )
                         self._point_3d_rope_cos = cos_3d  # (num_patches, head_dim)
                         self._point_3d_rope_sin = sin_3d  # (num_patches, head_dim)
-                        print(f"[3D_RoPE] ✓ Computed cos_3d.shape={cos_3d.shape}, sin_3d.shape={sin_3d.shape}")
                         
                         # STRICT CHECK: Verify dimensions
                         expected_head_dim = self.config.hidden_size // self.config.num_attention_heads
@@ -782,10 +752,6 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             self._point_3d_rope_cos is not None and
             is_prefill):  # Only during prefill
             
-            print(f"\n[3D_RoPE] Setting 3D RoPE data on attention layers...")
-            print(f"  cos_3d: {self._point_3d_rope_cos.shape}")
-            print(f"  sin_3d: {self._point_3d_rope_sin.shape}")
-            print(f"  point_token_positions: {self._point_token_positions}")
             
             # Package data for attention layers
             spatial_rope_data = (
@@ -800,12 +766,6 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 layer.self_attn._spatial_3d_rope_data = spatial_rope_data
                 num_set += 1
             
-            print(f"[3D_RoPE] ✓ Set 3D RoPE data on {num_set} attention layers")
-            print(f"[3D_RoPE] → Data contents: cos/sin shapes {cos_3d.shape}, {len(self._point_token_positions)} batches")
-            print(f"[3D_RoPE] → Example: layer 0 has data? {hasattr(self.model.layers[0].self_attn, '_spatial_3d_rope_data')}")
-            if hasattr(self.model.layers[0].self_attn, '_spatial_3d_rope_data'):
-                print(f"[3D_RoPE] → Layer 0 data is None? {self.model.layers[0].self_attn._spatial_3d_rope_data is None}")
-            
             # STRICT VERIFICATION: Check first layer
             first_attn = self.model.layers[0].self_attn
             if not hasattr(first_attn, '_spatial_3d_rope_data'):
@@ -817,8 +777,6 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 raise RuntimeError(
                     f"[3D_RoPE] FATAL ERROR: _spatial_3d_rope_data is None on attention layers!"
                 )
-            print(f"[3D_RoPE] ✓ Verification: Data successfully set on attention layers")
-            print(f"[3D_RoPE] → Layer 0 attention ID: {id(self.model.layers[0].self_attn)}\n")
         elif self.rotary_emb_3d is not None and is_prefill:
             # We have 3D_RoPE enabled but no data during prefill - this is an error!
             raise RuntimeError(
@@ -873,8 +831,6 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 if hasattr(layer.self_attn, '_spatial_3d_rope_data'):
                     layer.self_attn._spatial_3d_rope_data = None
                     num_cleared += 1
-            print(f"[3D_RoPE] ✓ Cleared _spatial_3d_rope_data from {num_cleared} attention layers")
-            print(f"[3D_RoPE] → Subsequent decoding will use cached point tokens (3D RoPE) + new text tokens (1D RoPE)\n")
         # =====================================================================
 
         hidden_states = outputs[0]
