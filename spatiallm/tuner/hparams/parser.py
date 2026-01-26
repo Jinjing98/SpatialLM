@@ -192,6 +192,17 @@ def get_train_args(
         data_args.eval_num_beams or training_args.generation_num_beams
     )
     training_args.remove_unused_columns = False  # important for multimodal dataset
+    
+    # Auto-append timestamp to output_dir (if not resuming from checkpoint)
+    # Can be disabled by setting AUTO_TIMESTAMP_OUTPUT_DIR=0
+    auto_timestamp = os.getenv("AUTO_TIMESTAMP_OUTPUT_DIR", "1").lower() in ["true", "1", "yes"]
+    if training_args.do_train and training_args.resume_from_checkpoint is None and auto_timestamp:
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%m%d_%H%M%S")
+        original_output_dir = training_args.output_dir
+        training_args.output_dir = f"{original_output_dir}_{timestamp}"
+        logger.info_rank0(f"[Auto-timestamp] output_dir: {original_output_dir} -> {training_args.output_dir}")
+    
     can_resume_from_checkpoint = True
 
     if (

@@ -140,6 +140,28 @@ def load_model(
     init_kwargs = _get_init_kwargs(model_args)
     config = load_config(model_args)
     config.point_config["num_bins"] = data_args.num_bins
+    # jj
+    # Inject 3D PE configuration parameters
+    if model_args.vlm_pe is not None:
+        # Handle string "None" to explicitly disable vlm_pe
+        if model_args.vlm_pe.lower() in ["none"]:
+            config.vlm_pe = None
+            logger.info_rank0(f"[Config] vlm_pe = None (explicitly disabled)")
+        else:
+            config.vlm_pe = model_args.vlm_pe
+            logger.info_rank0(f"[Config] vlm_pe = {config.vlm_pe}")
+    
+    # Set pcd_pe_merge_rule and pcd_theta
+    config.pcd_pe_merge_rule = model_args.pcd_pe_merge_rule
+    config.pcd_theta = model_args.pcd_theta
+    logger.info_rank0(f"[Config] pcd_pe_merge_rule = {config.pcd_pe_merge_rule}")
+    logger.info_rank0(f"[Config] pcd_theta = {config.pcd_theta}")
+    
+    # Disable flash attention for point cloud if requested
+    if model_args.disable_flash_attn:
+        config.point_config['enable_flash'] = False
+        logger.info_rank0(f"[Config] Disabled flash attention for point cloud encoder")
+    
     patch_config(config, model_args, init_kwargs, is_trainable)
 
     init_kwargs["config"] = config

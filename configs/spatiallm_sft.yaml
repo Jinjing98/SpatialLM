@@ -2,6 +2,14 @@
 model_name_or_path: manycore-research/SpatialLM1.1-Qwen-0.5B
 trust_remote_code: true
 
+### 3D Positional Encoding Configuration (uncomment to enable)
+vlm_pe: "3D_RoPE"           # Options: null (default 1D RoPE), "CCA_2DProj", "3D_RoPE", "3D_Sinusoidal"
+# vlm_pe: "3D_Sinusoidal"
+pcd_pe_merge_rule: "3D_with_1D"  # Options: "3D_only" (default), "3D_with_1D" (hybrid)
+# pcd_pe_merge_rule: "3D_only"
+pcd_theta: 10000             # Base frequency for 3D PE (default: 10000)
+disable_flash_attn: false    # Whether to disable flash attention (default: false)
+media_dir: /mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm # arkitscenes-spatiallm
 ### method
 do_train: true
 freeze_language_tower: false
@@ -10,19 +18,25 @@ train_proj_only: false
 
 ### dataset
 dataset: arkitscenes_train # arkitscenes_train,arkitscenes_val
-dataset_dir: arkitscenes-spatiallm # arkitscenes-spatiallm
+dataset_dir: /mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm # arkitscenes-spatiallm
 template: spatiallm_qwen # spatiallm_qwen, spatiallm_llama
 num_bins: 1280
 do_augmentation: false
 random_rotation: true
 cutoff_len: 8192
 overwrite_cache: true
-preprocessing_num_workers: 8
-dataloader_num_workers: 8
-save_dir: saves/arkitscenes
+# preprocessing_num_workers: 8
+# dataloader_num_workers: 8
+preprocessing_num_workers: 1
+dataloader_num_workers: 1
+# save_dir: saves/arkitscenes
+save_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/saves/arkitscenes
 
 ### output
-output_dir: saves
+# output_dir: saves
+# output_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/saves
+# Note: Timestamp auto-appended (e.g., spatiallm_0126_153045). Disable: AUTO_TIMESTAMP_OUTPUT_DIR=0
+output_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatiallm
 logging_steps: 10
 save_steps: 500
 overwrite_output_dir: false
@@ -40,7 +54,8 @@ bf16: false
 fp16: false
 tf32: true
 ddp_timeout: 180000000
-report_to: wandb # choices: [none, wandb, tensorboard, swanlab]
+# report_to: wandb # choices: [none, wandb, tensorboard, swanlab]
+report_to: tensorboard # choices: [none, wandb, tensorboard, swanlab]
 max_new_tokens: 4096
 
 ### eval

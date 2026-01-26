@@ -134,6 +134,31 @@ class BaseModelArguments:
             "help": "Whether to trust the execution of code from datasets/models defined on the Hub or not."
         },
     )
+    # jj
+    vlm_pe: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Positional encoding type for point cloud tokens in LLM. Options: None (standard 1D RoPE), 'CCA_2DProj', '3D_RoPE', '3D_Sinusoidal'."
+        },
+    )
+    pcd_pe_merge_rule: str = field(
+        default="3D_only",
+        metadata={
+            "help": "The merge rule for the PCD PE. Options: '3D_only' (only 3D PE), '3D_with_1D' (hybrid 3D+1D PE)."
+        },
+    )
+    pcd_theta: int = field(
+        default=10000,
+        metadata={
+            "help": "Base frequency for 3D positional encodings (used for both 3D_RoPE and 3D_Sinusoidal). Default: 10000."
+        },
+    )
+    disable_flash_attn: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to disable flash attention for point cloud encoder."
+        },
+    )
 
     def __post_init__(self):
         if self.model_name_or_path is None:
