@@ -118,6 +118,26 @@ if _QWEN2_AVAILABLE:
                     print(f"  key_states.shape: {key_states.shape}  (expect: [bsz, num_kv_heads, seq_len, head_dim])")
                 
                 cos_3d, sin_3d, point_token_positions = self._spatial_3d_rope_data
+                
+                if VERBOSE_3D_PE:
+                    # # === DEBUG: Compare 3D RoPE cos/sin with 1D RoPE ===
+                    # query_states_dbg = query_states.clone()
+                    # key_states_dbg = key_states.clone()
+                    # cos_dbg, sin_dbg = position_embeddings
+                    # query_states_dbg, key_states_dbg = apply_rotary_pos_emb(query_states_dbg, key_states_dbg, cos_dbg, sin_dbg)
+                    
+                    pt_start_pos = point_token_positions[0][0]  # First point token position
+                    cos, sin = position_embeddings  # (1, seq_len, head_dim)
+                    cos_1d_pts = cos[0, pt_start_pos, :]
+                    print('\n=== [DEBUG] Frequency Comparison ===')
+                    print(f'cos_3d.shape: {cos_3d.shape}, dtype: {cos_3d.dtype}')
+                    print(f'cos_3d[0,:10]: {cos_3d[0,:10]}')
+                    print(f'cos_1d_pts.shape: {cos_1d_pts.shape}, dtype: {cos_1d_pts.dtype}')
+                    print(f'cos_1d_pts[:10]: {cos_1d_pts[:10]}')
+                    print(f'Match (atol=1e-3)? {torch.allclose(cos_3d[0], cos_1d_pts, atol=1e-3)}')
+                    print('=' * 40 + '\n')
+                # ===================================================
+                
                 if VERBOSE_3D_PE:
                     print(f"[CHECKPOINT 2] 3D RoPE data:")
                     print(f"  cos_3d.shape: {cos_3d.shape}  (expect: [num_patches, head_dim])")
@@ -196,6 +216,25 @@ if _QWEN2_AVAILABLE:
                 # Restore point tokens with 3D RoPE (overwrite the 1D RoPE we just applied)
                 for batch_idx, (saved_q, saved_k) in saved_point_qk.items():
                     pt_start, pt_end = point_token_positions[batch_idx]
+                    
+                    # # # SANITY CHECK: Compare 1D-rotated vs 3D-rotated Q/K
+                    # if VERBOSE_3D_PE:
+                    #     q_after_1d = query_states_dbg[batch_idx:batch_idx+1, :, pt_start:pt_end, :]
+                    #     k_after_1d = key_states_dbg[batch_idx:batch_idx+1, :, pt_start:pt_end, :]
+                        
+                    #     q_diff = (saved_q - q_after_1d).abs().max().item()
+                    #     k_diff = (saved_k - k_after_1d).abs().max().item()
+                        
+                    #     print(f"[SANITY CHECK] Batch {batch_idx}, point tokens [{pt_start}:{pt_end}]:")
+                    #     print(f"  Max |3D_RoPE_Q - 1D_RoPE_Q|: {q_diff:.6e}")
+                    #     print(f"  Max |3D_RoPE_K - 1D_RoPE_K|: {k_diff:.6e}")
+                        
+                    #     threshold = 1e-5
+                    #     if q_diff < threshold and k_diff < threshold:
+                    #         print(f"  ✅ IDENTICAL (within {threshold}) - ratio_1d=1.0 works as expected!")
+                    #     else:
+                    #         print(f"  ⚠️  DIFFERENT - 3D RoPE is actually applying different rotations!")
+                    
                     query_states[batch_idx:batch_idx+1, :, pt_start:pt_end, :] = saved_q
                     key_states[batch_idx:batch_idx+1, :, pt_start:pt_end, :] = saved_k
                     if VERBOSE_3D_PE:
@@ -315,7 +354,7 @@ if _LLAMA_AVAILABLE:
                     print(f"  query_states.shape: {query_states.shape}  (expect: [bsz, num_heads, seq_len, head_dim])")
                     print(f"  key_states.shape: {key_states.shape}  (expect: [bsz, num_kv_heads, seq_len, head_dim])")
                 
-                cos_3d, sin_3d, point_token_positions = self._spatial_3d_rope_data
+                cos_3d, sin_3d, point_token_positions = self._spatial_3d_rope_data       
                 if VERBOSE_3D_PE:
                     print(f"[CHECKPOINT 2] 3D RoPE data:")
                     print(f"  cos_3d.shape: {cos_3d.shape}  (expect: [num_patches, head_dim])")

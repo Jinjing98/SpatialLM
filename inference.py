@@ -58,6 +58,7 @@ def generate_layout(
     top_k=10,
     top_p=0.95,
     temperature=0.6,
+    do_sample=True,
     num_beams=1,
     seed=-1,
     max_new_tokens=4096,
@@ -100,7 +101,7 @@ def generate_layout(
         {"input_ids": input_ids, "point_clouds": point_cloud},
         streamer=streamer,
         max_new_tokens=max_new_tokens,
-        do_sample=True,
+        do_sample=do_sample,
         use_cache=True,
         temperature=temperature,
         top_p=top_p,
@@ -248,6 +249,12 @@ if __name__ == "__main__":
         help="The value used to module the next token probabilities",
     )
     parser.add_argument(
+        "--do_sample",
+        type=lambda x: x.lower() in ['true', '1', 'yes'],
+        default=True,
+        help="Whether to use sampling (True) or greedy decoding (False). Default: True",
+    )
+    parser.add_argument(
         "--num_beams",
         type=int,
         default=1,
@@ -297,6 +304,12 @@ if __name__ == "__main__":
         choices=["3D_only", "3D_with_1D"],
         help="The merge rule for the PCD PE. 3D_only: only 3D RoPE, 3D_with_1D: 3D RoPE and 1D RoPE",
     )
+    parser.add_argument(
+        "--pcd_theta",
+        type=int,
+        default=10000,
+        help="Base frequency for 3D positional encodings (used for both 3D_RoPE and 3D_Sinusoidal). Default: 10000",
+    )
 
 
     args = parser.parse_args()
@@ -331,6 +344,11 @@ if __name__ == "__main__":
         # Set pcd_pe_merge_rule: Pass through config (similar to vlm_pe)
         config.pcd_pe_merge_rule = args.pcd_pe_merge_rule
         print(f"[Config] pcd_pe_merge_rule = {config.pcd_pe_merge_rule}")
+        
+        # Set pcd_theta: Base frequency for 3D positional encodings
+        config.pcd_theta = args.pcd_theta
+        print(f"[Config] pcd_theta = {config.pcd_theta}")
+        
         model = AutoModelForCausalLM.from_pretrained(
             args.model_path, 
             config=config,
@@ -413,6 +431,7 @@ if __name__ == "__main__":
             top_k=args.top_k,
             top_p=args.top_p,
             temperature=args.temperature,
+            do_sample=args.do_sample,
             num_beams=args.num_beams,
             seed=args.seed,
             detect_type=args.detect_type,

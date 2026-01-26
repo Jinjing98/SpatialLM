@@ -169,7 +169,7 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
                 f"Error: {_SPATIAL_ATTENTION_ERROR}"
             )
         # ============================================================
-        
+        self.pcd_theta = getattr(config, 'pcd_theta', 10000)  # Base frequency for 3D PE (default: 10000)
         # 3D RoPE: vlm_pe="3D_RoPE"
         if vlm_pe == "3D_RoPE":
             # Read pcd_pe_merge_rule from config (passed from command line or default)
@@ -185,7 +185,8 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
             self.rotary_emb_3d = RotaryEmbedding3D(
                 head_dim=head_dim,  # Apply per-head (e.g., 64)
                 max_position_embeddings=config.max_position_embeddings,
-                base=10000,
+                base=getattr(config, 'rope_theta', 10000),  # Use native RoPE base for 1D component
+                base_3d=self.pcd_theta,  # Use pcd_theta for 3D components
                 device=None,
                 merge_rule=pcd_pe_merge_rule
             )
@@ -194,7 +195,6 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
             self._point_3d_rope_sin = None  # Will store sin values (N, hidden_size)
             self._point_token_positions = None  # Token positions of point cloud tokens in sequence
             
-            logger.info(f"[3D_RoPE] Initialized with pcd_pe_merge_rule={pcd_pe_merge_rule}")
         else:
             self.rotary_emb_3d = None
         
@@ -210,8 +210,7 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
             self.pcd_pe_merge_rule_sinusoidal = pcd_pe_merge_rule
             self._point_3d_sinusoidal_pe = None  # Will store PE for current batch (N, hidden_size)
             self._point_sinusoidal_positions = None  # Token positions for PE application
-            logger.info(f"[3D_Sinusoidal] Initialized with pcd_pe_merge_rule={pcd_pe_merge_rule}")
-
+            logger.info(f"[3D_Sinusoidal] Initialized: pcd_pe_merge_rule={pcd_pe_merge_rule} pcd_theta={self.pcd_theta}")
         # Initialize weights and apply final processing
         self.post_init()
         
@@ -522,7 +521,8 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
                                 coords_3d=patch_coords,
                                 hidden_size=self.config.hidden_size,
                                 num_heads=self.config.num_attention_heads,
-                                base=10000,
+                                base=getattr(self.config, 'rope_theta', 10000),
+                                base_3d=self.pcd_theta,
                                 device=inputs_embeds.device,
                                 merge_rule=self.pcd_pe_merge_rule_sinusoidal,
                                 position_ids=None
@@ -655,7 +655,8 @@ class SpatialLMLlamaForCausalLM(LlamaForCausalLM):
                         coords_3d=self._point_patch_coords_for_sinusoidal,
                         hidden_size=self.config.hidden_size,
                         num_heads=self.config.num_attention_heads,
-                        base=10000,
+                        base=getattr(self.config, 'rope_theta', 10000),
+                        base_3d=self.pcd_theta,
                         device=inputs_embeds.device,
                         merge_rule=self.pcd_pe_merge_rule_sinusoidal,
                         position_ids=position_ids_point

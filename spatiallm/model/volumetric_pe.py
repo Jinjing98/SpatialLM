@@ -21,6 +21,8 @@ import torch
 from torch import nn
 import logging
 
+from spatiallm.model.dim_allocation_utils import allocate_rope_dimensions
+
 logger = logging.getLogger(__name__)
 
 # Global flag to track if 3D RoPE is available
@@ -34,62 +36,61 @@ class RotaryEmbedding3D(nn.Module):
     **DESIGN:** Applies to head_dim AFTER head splitting (per-head application).
     All attention heads share the same 3D spatial encoding pattern.
     
-    Splits the head_dim into 3 parts for X, Y, Z coordinates and applies
-    1D RoPE to each dimension independently.
+    Splits the head_dim into components for 1D (temporal) and 3D (X, Y, Z) spatial
+    coordinates using the allocate_rope_dimensions() utility function.
     
-    Example:
-        head_dim=64 -> d_x=21, d_y=21, d_z=22
+    Dimension Allocation:
+        - "3D_only": ratio_1d=0.0 → (0, 21, 21, 22) for head_dim=64
+        - "3D_with_1D": ratio_1d=0.5 → (32, 10, 10, 12) for head_dim=64
     
     Args:
         head_dim: Dimension per attention head (e.g., 64)
         max_position_embeddings: Maximum sequence length
         base: Base for inverse frequency calculation (default: 10000)
         device: Device to place tensors on
+        merge_rule: "3D_only" (pure spatial) or "3D_with_1D" (hybrid temporal+spatial)
     """
     
-    def __init__(self, head_dim, max_position_embeddings=32768, base=10000, device=None, merge_rule="3D_only"):
+    def __init__(self, head_dim, max_position_embeddings=32768, base=10000, base_3d=10000, device=None, merge_rule="3D_only"):
         super().__init__()
         
         self.head_dim = head_dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
+        self.base_3d = base_3d
         self.merge_rule = merge_rule
         
         # Dimension allocation based on merge_rule
         if merge_rule == "3D_with_1D":
-            # Allocate: 32 (1D) + 10 (X) + 10 (Y) + 12 (Z) = 64
-            # For other head_dims, scale proportionally
-            self.d_1d = head_dim // 2  # 32 for head_dim=64
-            remaining = head_dim - self.d_1d  # 32
-            self.d_x = remaining // 3  # 10
-            self.d_y = remaining // 3  # 10
-            self.d_z = remaining - (self.d_x + self.d_y)  # 12
+            # Hybrid: 50% for 1D (temporal), 50% for 3D (spatial)
+            # Use divide=1 to allow (21,21,22) split without forcing even dimensions
+            self.d_1d, self.d_x, self.d_y, self.d_z = allocate_rope_dimensions(
+                dim=head_dim,
+                ratio_1d=1.0, divide=0, # as RoPE_1D
+                # ratio_1d=0.75, divide=2,  # No strict divisibility constraint
+                # ratio_1d=0.0, divide=2,  # 3D rope only
+            )
             
-            logger.warning(
+            # logger.info(
+            print(
                 f"[3D_RoPE] merge_rule='3D_with_1D': "
                 f"head_dim={head_dim} split into d_1d={self.d_1d}, "
                 f"d_x={self.d_x}, d_y={self.d_y}, d_z={self.d_z}"
             )
         else:  # "3D_only"
-            # Split head_dim across 3 spatial dimensions (X, Y, Z)
-            # Allocate as evenly as possible: (d//3, d//3, d - 2*(d//3))
-            self.d_1d = 0  # No 1D component
-            base_dim = head_dim // 3
-            remainder = head_dim % 3
+            # Pure 3D: no 1D component
+            # Use divide=1 to allow (21,21,22) split for head_dim=64
+            self.d_1d, self.d_x, self.d_y, self.d_z = allocate_rope_dimensions(
+                dim=head_dim,
+                ratio_1d=0.0,
+                divide=2  # No strict divisibility constraint
+            )
             
-            # Simple allocation: give remainder to the last dimension
-            self.d_x = base_dim
-            self.d_y = base_dim
-            self.d_z = base_dim + remainder
-            
-            # Warn if unequal split
-            if remainder != 0:
-                logger.warning(
-                    f"[3D_RoPE] merge_rule='3D_only': "
-                    f"head_dim ({head_dim}) is not divisible by 3. "
-                    f"Using unequal split: d_x={self.d_x}, d_y={self.d_y}, d_z={self.d_z}. "
-                    f"This is a standard practice and should not affect model performance."
-                )
+            # logger.info(
+            print(
+                f"[3D_RoPE] merge_rule='3D_only': "
+                f"head_dim={head_dim} split into d_x={self.d_x}, d_y={self.d_y}, d_z={self.d_z}"
+            )
         
         # Compute inverse frequencies for each dimension
         # For dimension d, we need (d+1)//2 frequency bands to handle both even and odd d
@@ -102,9 +103,9 @@ class RotaryEmbedding3D(nn.Module):
         else:
             self.register_buffer("inv_freq_1d", None, persistent=False)
         
-        inv_freq_x = 1.0 / (self.base ** (torch.arange(0, self.d_x, 2, dtype=torch.float32).to(device) / self.d_x))
-        inv_freq_y = 1.0 / (self.base ** (torch.arange(0, self.d_y, 2, dtype=torch.float32).to(device) / self.d_y))
-        inv_freq_z = 1.0 / (self.base ** (torch.arange(0, self.d_z, 2, dtype=torch.float32).to(device) / self.d_z))
+        inv_freq_x = 1.0 / (self.base_3d ** (torch.arange(0, self.d_x, 2, dtype=torch.float32).to(device) / self.d_x))
+        inv_freq_y = 1.0 / (self.base_3d ** (torch.arange(0, self.d_y, 2, dtype=torch.float32).to(device) / self.d_y))
+        inv_freq_z = 1.0 / (self.base_3d ** (torch.arange(0, self.d_z, 2, dtype=torch.float32).to(device) / self.d_z))
         
         self.register_buffer("inv_freq_x", inv_freq_x, persistent=False)
         self.register_buffer("inv_freq_y", inv_freq_y, persistent=False)
@@ -162,18 +163,21 @@ class RotaryEmbedding3D(nn.Module):
         freqs_x = torch.matmul(x_coords, inv_freq_x.unsqueeze(0))  # (N, d_x//2)
         freqs_y = torch.matmul(y_coords, inv_freq_y.unsqueeze(0))  # (N, d_y//2)
         freqs_z = torch.matmul(z_coords, inv_freq_z.unsqueeze(0))  # (N, d_z//2)
-        
-        # Duplicate frequencies for RoPE: [θ0, θ0, θ1, θ1, ...]
+
+
+        # Duplicate frequencies for RoPE: [θ0, θ1, ..., θ0, θ1, ...]
+        # This matches native RoPE (concatenate, not interleave)
         # For odd dimensions, we truncate or pad to match exact dimension
         def expand_freqs(freqs, target_dim):
             # freqs: (N, ceil(d/2)) or (N, floor(d/2)), target: (N, d)
-            freqs_expanded = torch.stack([freqs, freqs], dim=-1).flatten(-2)  # (N, d//2 * 2)
+            # Native RoPE: torch.cat([freqs, freqs], dim=-1)
+            freqs_expanded = torch.cat([freqs, freqs], dim=-1)  # (N, d//2 * 2)
             current_dim = freqs_expanded.shape[-1]
             if current_dim > target_dim:
                 # Truncate (for odd dimensions where we have one extra)
                 freqs_expanded = freqs_expanded[:, :target_dim]
             elif current_dim < target_dim:
-                # Pad with zeros (shouldn't happen with our setup, but just in case)
+                assert False, "This should not happen"
                 pad_size = target_dim - current_dim
                 freqs_expanded = torch.cat([freqs_expanded, torch.zeros(freqs_expanded.shape[0], pad_size, device=freqs.device, dtype=freqs.dtype)], dim=-1)
             return freqs_expanded
@@ -233,7 +237,7 @@ def apply_rotary_pos_emb_3d(q, k, cos_3d, sin_3d):
     return q_embed, k_embed
 
 
-def compute_3d_sinusoidal_pe(coords_3d, hidden_size, num_heads, base=10000, device=None, merge_rule="3D_only", position_ids=None):
+def compute_3d_sinusoidal_pe(coords_3d, hidden_size, num_heads, base=10000, base_3d=10000, device=None, merge_rule="3D_only", position_ids=None):
     """
     Compute 3D Sinusoidal Position Encoding for point cloud tokens.
     
@@ -253,41 +257,40 @@ def compute_3d_sinusoidal_pe(coords_3d, hidden_size, num_heads, base=10000, devi
         pe: (N, hidden_size) - 3D Sinusoidal position encoding
         
     Dimension Allocation:
-        - "3D_only": [298, 298, 300] for [X, Y, Z] (hidden_size=896)
-        - "3D_with_1D": [448, 148, 148, 152] for [T, X, Y, Z] (hidden_size=896)
+        Uses allocate_rope_dimensions() utility function:
+        - "3D_only": ratio_1d=0.0, divide=1 → (0, 298, 298, 300) for hidden_size=896
+        - "3D_with_1D": ratio_1d=0.5, divide=1 → (448, 149, 149, 150) for hidden_size=896
     """
     N = coords_3d.shape[0]
     
     # Dimension allocation based on merge_rule
     if merge_rule == "3D_with_1D":
-        # Allocate: 448 (1D/T) + 148 (X) + 148 (Y) + 152 (Z) = 896
-        d_1d = hidden_size // 2  # 448
-        remaining = hidden_size - d_1d  # 448
-        d_x = remaining // 3  # 148
-        d_y = remaining // 3  # 148
-        d_z = remaining - (d_x + d_y)  # 152
+        # Hybrid: 50% for 1D (temporal), 50% for 3D (spatial)
+        # Use divide=1 to allow flexible splits
+        d_1d, d_x, d_y, d_z = allocate_rope_dimensions(
+            dim=hidden_size,
+            ratio_1d=0.5,
+            divide=2  # No strict divisibility constraint
+        )
         
-        logger.warning(
+        logger.info(
             f"[3D_Sinusoidal] merge_rule='3D_with_1D': "
             f"hidden_size={hidden_size} split into d_1d={d_1d}, "
             f"d_x={d_x}, d_y={d_y}, d_z={d_z}"
         )
     else:  # "3D_only"
-        # Allocate: 298 (X) + 298 (Y) + 300 (Z) = 896
-        d_1d = 0
-        base_dim = hidden_size // 3
-        remainder = hidden_size % 3
-        d_x = base_dim  # 298
-        d_y = base_dim  # 298
-        d_z = base_dim + remainder  # 300
+        # Pure 3D: no 1D component
+        # Use divide=1 to allow (298,298,300) split for hidden_size=896
+        d_1d, d_x, d_y, d_z = allocate_rope_dimensions(
+            dim=hidden_size,
+            ratio_1d=0.0,
+            divide=2  # No strict divisibility constraint
+        )
         
-        # Warn if unequal split
-        if remainder != 0:
-            logger.warning(
-                f"[3D_Sinusoidal] merge_rule='3D_only': "
-                f"hidden_size ({hidden_size}) is not divisible by 3. "
-                f"Using unequal split: d_x={d_x}, d_y={d_y}, d_z={d_z}."
-            )
+        logger.info(
+            f"[3D_Sinusoidal] merge_rule='3D_only': "
+            f"hidden_size={hidden_size} split into d_x={d_x}, d_y={d_y}, d_z={d_z}"
+        )
     
     # Extract X, Y, Z coordinates
     device = device or coords_3d.device
@@ -297,11 +300,11 @@ def compute_3d_sinusoidal_pe(coords_3d, hidden_size, num_heads, base=10000, devi
     # PE(pos, 2i) = sin(pos / base^(2i/d))
     # PE(pos, 2i+1) = cos(pos / base^(2i/d))
     
-    def compute_sinusoidal_dim(coords, d):
+    def compute_sinusoidal_dim(coords, d, theta):
         """Compute sinusoidal PE for one dimension (spatial or temporal)."""
         # Frequency term: base^(-2i/d) for i in [0, d//2)
         div_term = torch.exp(
-            torch.arange(0, d, 2, dtype=torch.float32, device=device) * (-math.log(base) / d)
+            torch.arange(0, d, 2, dtype=torch.float32, device=device) * (-math.log(theta) / d)
         ).unsqueeze(0)  # (1, d//2)
         
         # Compute sin and cos
@@ -335,7 +338,7 @@ def compute_3d_sinusoidal_pe(coords_3d, hidden_size, num_heads, base=10000, devi
         else:
             position_ids_1d = position_ids.float()  # (N, 1)
         
-        pe_1d = compute_sinusoidal_dim(position_ids_1d, d_1d)  # (N, d_1d)
+        pe_1d = compute_sinusoidal_dim(position_ids_1d, d_1d, theta=base)  # (N, d_1d)
     else:
         pe_1d = None
     
@@ -344,9 +347,9 @@ def compute_3d_sinusoidal_pe(coords_3d, hidden_size, num_heads, base=10000, devi
     y_coords = coords_3d[:, 1:2]  # (N, 1)
     z_coords = coords_3d[:, 2:3]  # (N, 1)
     
-    pe_x = compute_sinusoidal_dim(x_coords, d_x)  # (N, d_x)
-    pe_y = compute_sinusoidal_dim(y_coords, d_y)  # (N, d_y)
-    pe_z = compute_sinusoidal_dim(z_coords, d_z)  # (N, d_z)
+    pe_x = compute_sinusoidal_dim(x_coords, d_x, theta=base_3d)  # (N, d_x)
+    pe_y = compute_sinusoidal_dim(y_coords, d_y, theta=base_3d)  # (N, d_y)
+    pe_z = compute_sinusoidal_dim(z_coords, d_z, theta=base_3d)  # (N, d_z)
     
     # === Part 3: Concatenate all components ===
     if pe_1d is not None:

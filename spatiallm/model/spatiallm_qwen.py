@@ -81,6 +81,8 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
     def __init__(self, config):
         super().__init__(config)
         self.model = Qwen2Model(config)
+        # print('Config to initialize SpatialLMQwenForCausalLM:')
+        # print(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -169,6 +171,8 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 f"Error: {_SPATIAL_ATTENTION_ERROR}"
             )
         # ============================================================
+        # used for both 3D_RoPE and 3D_Sinusoidal
+        self.pcd_theta = getattr(config, 'pcd_theta', 10000)  
         
         # 3D RoPE: vlm_pe="3D_RoPE"
         if vlm_pe == "3D_RoPE":
@@ -185,16 +189,19 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             self.rotary_emb_3d = RotaryEmbedding3D(
                 head_dim=head_dim,  # Apply per-head (e.g., 64)
                 max_position_embeddings=config.max_position_embeddings,
-                base=10000,
+                base=config.rope_theta,              # Qwen2: 1000000, Llama: 10000
+                base_3d=self.pcd_theta,
                 device=None,
                 merge_rule=pcd_pe_merge_rule
             )
+            print(f"[3D_RoPE] 1D base={config.rope_theta}")
+            print(f"[3D_RoPE] pcd base={self.pcd_theta}")
             self._point_patch_coords = None  # Will store patch coords for current batch (N, 3)
             self._point_3d_rope_cos = None  # Will store cos values (N, hidden_size)
             self._point_3d_rope_sin = None  # Will store sin values (N, hidden_size)
             self._point_token_positions = None  # Token positions of point cloud tokens in sequence
             
-            logger.info(f"[3D_RoPE] Initialized with pcd_pe_merge_rule={pcd_pe_merge_rule}")
+            logger.info(f"[3D_RoPE] Initialized with pcd_pe_merge_rule={pcd_pe_merge_rule}, base={self.pcd_theta}")
         else:
             self.rotary_emb_3d = None
         
@@ -210,7 +217,9 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             self.pcd_pe_merge_rule_sinusoidal = pcd_pe_merge_rule
             self._point_3d_sinusoidal_pe = None  # Will store PE for current batch (N, hidden_size)
             self._point_sinusoidal_positions = None  # Token positions for PE application
-            logger.info(f"[3D_Sinusoidal] Initialized with pcd_pe_merge_rule={pcd_pe_merge_rule}")
+            print(f"[3D_RoPE] 1D base={config.rope_theta}")
+            logger.info(f"[3D_Sinusoidal] Initialized: pcd_pe_merge_rule={pcd_pe_merge_rule}, pcd_theta={self.pcd_theta}")
+            print(f"[3D_RoPE] pcd base={self.pcd_theta}")
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -529,7 +538,8 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                                 coords_3d=patch_coords,
                                 hidden_size=self.config.hidden_size,
                                 num_heads=self.config.num_attention_heads,
-                                base=10000,
+                                base=getattr(self.config, 'rope_theta', 1000000),
+                                base_3d=self.pcd_theta,
                                 device=inputs_embeds.device,
                                 merge_rule=self.pcd_pe_merge_rule_sinusoidal,
                                 position_ids=None
@@ -633,6 +643,12 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                         print(f"[3D_RoPE] Computing with position_ids for 3D_with_1D mode...")
                         print(f"[3D_RoPE] Position IDs range: [{pt_start}, {pt_end}) -> {position_ids_point.shape}")
                         
+                        print('*'*10)
+                        print('RoPE_3D cos sin computation:')
+                        print('_point_patch_coords_for_rope.shape:', self._point_patch_coords_for_rope.shape)
+                        print('_point_patch_coords_for_rope[0]:', self._point_patch_coords_for_rope[0])
+                        print('seq_len:', self._point_patch_coords_for_rope.shape[0])
+                        print('position_ids_point.shape:', position_ids_point.shape, position_ids_point[0])
                         # Now compute 3D RoPE with position_ids
                         cos_3d, sin_3d = self.rotary_emb_3d(
                             self._point_patch_coords_for_rope,
@@ -663,7 +679,8 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                         coords_3d=self._point_patch_coords_for_sinusoidal,
                         hidden_size=self.config.hidden_size,
                         num_heads=self.config.num_attention_heads,
-                        base=10000,
+                        base=getattr(self.config, 'rope_theta', 1000000),
+                        base_3d=self.pcd_theta,
                         device=inputs_embeds.device,
                         merge_rule=self.pcd_pe_merge_rule_sinusoidal,
                         position_ids=position_ids_point
