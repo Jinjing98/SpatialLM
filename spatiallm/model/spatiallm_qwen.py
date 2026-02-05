@@ -763,6 +763,7 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             # Set data on all attention layers
             num_set = 0
             for layer in self.model.layers:
+                # JJ: HACK
                 layer.self_attn._spatial_3d_rope_data = spatial_rope_data
                 num_set += 1
             
