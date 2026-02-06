@@ -193,7 +193,7 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                     position_ids=position_ids[0] if position_ids is not None else None,
                     point_token_pos=point_start_pos,
                     num_point_tokens=num_point_tokens,
-                    concentric_pos=self._cca_concentric_pos,
+                    concentric_pos=self._point_cca_positions,  # Pass 1D tensor of CCA positions per token
                     device=inputs_embeds.device,
                     seq_len=inputs_embeds.shape[1],  # After embedding fusion
                     past_key_values=past_key_values
@@ -209,9 +209,31 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
         # Stack batch
         batch_cca_position_ids = torch.cat(batch_cca_position_ids, dim=0)
         
+        # Convert 2D attention_mask [B, L] to 4D causal attention mask [B, 1, L, L]
+        # This is required by build_cca_attention_mask
+        batch_size = inputs_embeds.shape[0]
+        seq_len = inputs_embeds.shape[1]
+        if attention_mask is not None and attention_mask.dim() == 2:
+            # Create causal mask: upper triangular with -inf
+            causal_mask = torch.triu(
+                torch.full((seq_len, seq_len), float('-inf'), device=inputs_embeds.device),
+                diagonal=1
+            )
+            # Expand to [B, 1, L, L]
+            causal_mask = causal_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, seq_len, seq_len)
+            
+            # Apply padding mask: set padded positions to -inf
+            # attention_mask: [B, L] where 1=valid, 0=padding
+            padding_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, L]
+            causal_mask = causal_mask.masked_fill(padding_mask == 0, float('-inf'))
+            
+            attention_mask_4d = causal_mask.to(inputs_embeds.dtype)
+        else:
+            attention_mask_4d = attention_mask
+        
         # Build CCA attention mask
         cca_attention_mask = build_cca_attention_mask(
-            attention_mask=attention_mask,
+            attention_mask=attention_mask_4d,
             batch_point_token_pos=batch_point_token_pos,
             batch_cca_position_ids=batch_cca_position_ids,
             num_point_tokens=num_point_tokens,
@@ -233,15 +255,14 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
         coords = point_cloud[:, :3].int()
         feats = point_cloud[:, 3:].float()
         
-        # Compute CCA 2D projection for point cloud tokens
-        # feats[:, :3] contains normalized 3D coordinates in [0, 1]
-        self._compute_cca_2d_projection(feats[:, :3], device)
-        
         if self.point_backbone_type == PointBackboneType.SCENESCRIPT:
             pc_sparse_tensor = torchsparse.SparseTensor(coords=coords, feats=feats)
             pc_sparse_tensor = sparse_collate([pc_sparse_tensor])  # batch_size = 1
             pc_sparse_tensor = pc_sparse_tensor.to(device)
             encoded_features = self.point_backbone(pc_sparse_tensor)
+            # TODO: For SceneScript, we need to implement coordinate extraction for CCA
+            # For now, fall back to using original point coordinates
+            self._compute_cca_2d_projection(feats[:, :3], device)
             return self.point_proj(encoded_features["context"].to(dtype))
         elif self.point_backbone_type == PointBackboneType.SONATA:
             input_dict = {
@@ -250,7 +271,12 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 "feat": feats.to(device),
                 "batch": torch.zeros(coords.shape[0], dtype=torch.long).to(device),
             }
-            encoded_features = self.point_backbone(input_dict)
+            # Get encoded features and normalized coordinates of encoded tokens
+            encoded_features, token_coords = self.point_backbone(input_dict, return_coords=True)
+            
+            # Compute CCA 2D projection using encoded token coordinates (M tokens, not N points)
+            self._compute_cca_2d_projection(token_coords, device)
+            
             # add the batch dimension
             encoded_features = encoded_features.unsqueeze(0)
             return self.point_proj(encoded_features.to(dtype))
@@ -433,8 +459,10 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             ), "The length of attention mask and inputs embeds should be the same"
 
         # Build CCA position IDs and attention mask
-        # Apply during prefill (past_key_values is None), not during decoding
-        if point_clouds is not None and past_key_values is None:
+        # Apply during prefill (input_ids.shape[1] != 1), not during decoding
+        # Note: We use input_ids.shape[1] != 1 instead of past_key_values is None
+        # because transformers may initialize past_key_values as an empty Cache object
+        if point_clouds is not None and input_ids.shape[1] != 1:
             print('[CCA] Building CCA position_ids and attention_mask')
             position_ids, attention_mask = self._build_cca_position_ids_and_mask(
                 input_ids=input_ids,
@@ -446,7 +474,14 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             print(f'[CCA] CCA position_ids shape: {position_ids.shape}')
             print(f'[CCA] CCA attention_mask shape: {attention_mask.shape}')
 
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+            # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+            print(f'[CCA] cache_position is None: {cache_position == None}')
+            # save the PREFILL position_ids in json
+            import json
+            with open('cca_prefill_position_ids.json', 'w') as f:
+                json.dump(position_ids.cpu().tolist(), f)
+            print(f'[CCA] prefill position_ids: {position_ids.shape}')
+
         outputs = self.model(
             input_ids=None,
             attention_mask=attention_mask,
@@ -466,39 +501,46 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
 
         loss = None
         if labels is not None:
-            # prepare new labels
-            new_labels = []
-            max_num_tokens = logits.shape[1]
-            for i in range(len(point_start_end_token_pos)):
-                cur_labels = labels[i]
-                (
-                    cur_point_start_token_pos,
-                    num_patches,
-                    cur_point_end_token_pos,
-                ) = point_start_end_token_pos[i]
-                cur_new_labels = torch.cat(
+            # Adjust labels only if point clouds were processed
+            # JJ: set IGNORE_INDEX -100 for pcd tokesn to avoid loss calculation on them
+            if (
+                self.point_backbone is not None
+                and (input_ids.shape[1] != 1 or self.training)
+                and point_clouds is not None
+            ):
+                # prepare new labels
+                new_labels = []
+                max_num_tokens = logits.shape[1]
+                for i in range(len(point_start_end_token_pos)):
+                    cur_labels = labels[i]
                     (
-                        cur_labels[: cur_point_start_token_pos + 1],
-                        torch.full(
-                            (num_patches,),
-                            IGNORE_INDEX,
-                            device=cur_labels.device,
+                        cur_point_start_token_pos,
+                        num_patches,
+                        cur_point_end_token_pos,
+                    ) = point_start_end_token_pos[i]
+                    cur_new_labels = torch.cat(
+                        (
+                            cur_labels[: cur_point_start_token_pos + 1],
+                            torch.full(
+                                (num_patches,),
+                                IGNORE_INDEX,
+                                device=cur_labels.device,
+                            ),
+                            cur_labels[cur_point_end_token_pos:],
                         ),
-                        cur_labels[cur_point_end_token_pos:],
-                    ),
-                    dim=0,
-                )
-                cur_new_labels = F.pad(
-                    cur_new_labels,
-                    (0, max_num_tokens - cur_new_labels.shape[0]),
-                    value=IGNORE_INDEX,
-                )
-                new_labels.append(cur_new_labels)
-            labels = torch.stack(new_labels, dim=0)
+                        dim=0,
+                    )
+                    cur_new_labels = F.pad(
+                        cur_new_labels,
+                        (0, max_num_tokens - cur_new_labels.shape[0]),
+                        value=IGNORE_INDEX,
+                    )
+                    new_labels.append(cur_new_labels)
+                labels = torch.stack(new_labels, dim=0)
 
-            assert (
-                labels.shape[1] == logits.shape[1]
-            ), "The length of labels and logits should be the same"
+                assert (
+                    labels.shape[1] == logits.shape[1]
+                ), "The length of labels and logits should be the same"
 
             loss = self.loss_function(
                 logits=logits,
@@ -549,3 +591,33 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
 
 AutoConfig.register("cca_spatiallm_qwen", CCASpatialLMQwenConfig)
 AutoModelForCausalLM.register(CCASpatialLMQwenConfig, CCASpatialLMQwenForCausalLM)
+
+if __name__ == "__main__":
+    pass
+
+
+# [CCA] Computing 2D projection for 507 points
+# [CCA] Built concentric position matrix with grid_size=24
+# [CCA] Point CCA positions shape: torch.Size([507])
+# [CCA] point_features num_patches:  507
+# [CCA] cur_input_ids:  torch.Size([221])
+# [CCA] point_start_token_id/point_end_token_id:  151652 151653
+# [CCA] point_start_token_pos:  tensor(14, device='cuda:0') point_end_token_pos:  tensor(16, device='cuda:0')
+# [CCA] cur_new_input_embeds:  torch.Size([727, 896])
+# [CCA] cur_new_attention_mask:  torch.Size([727])
+# [CCA] max_num_tokens in the batch with b_size1:  727
+
+
+# Before PCD FUSION:
+# [0...13] [14: point_start] [15: point_pad] [16: point_end] [17...220]
+#   14 tokens      1 token          1 token       1 token      204 tokens
+# AFTER PCD FUSION:
+# [0...14: including point_start] [507 point features] [16: point_end onwards]
+#         15 tokens                   507 tokens           205 tokens
+        
+
+# 507 tokens → 576 grid positions
+# - Token 0-5 → Grid cell (12, 10)  # Multiple tokens in same cell
+# - Token 6 → Grid cell (13, 10)
+# - ...
+# - Grid cells (0,0), (0,1), ... may be empty (no points projected there)

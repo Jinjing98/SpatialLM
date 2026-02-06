@@ -25,7 +25,8 @@ import torch
 # ============================================================================
 # Global CCA Configuration
 # ============================================================================
-CCA_GRID_SIZE = 24  # 2D grid size (24x24 = 576, same as image tokens in FCA)
+CCA_GRID_SIZE = 24  # 2D grid size for point cloud projection (8x8 = 64 cells)
+                    # Note: Images use 24x24=576, but point clouds typically use fewer shells
 CCA_PROJECTION = "top_down"  # Orthographic projection direction
 
 
@@ -43,7 +44,7 @@ def project_pointcloud_to_2d_grid(coords_3d, grid_size=CCA_GRID_SIZE, projection
     Args:
         coords_3d: (N, 3) torch.Tensor, normalized coordinates in [0, 1]
                    # TODO: Verify column order is [X, Y, Z]
-        grid_size: int, size of 2D grid (default 24)
+        grid_size: int, size of 2D grid (default from CCA_GRID_SIZE)
         projection: str, projection plane
                     - "top_down": XY plane (drop Z, bird's eye view) - DEFAULT
                     - "front": XZ plane (drop Y, front view)
@@ -88,31 +89,38 @@ def build_concentric_position_matrix(grid_size=CCA_GRID_SIZE, device='cpu'):
     """
     Build 2D concentric position matrix for CCA.
     
-    This function is 100% copied from modelling_fca_Feng.py lines 1390-1405.
-    It generates a 24x24 matrix where each cell contains its "shell ID" in a
-    concentric pattern, with center points having ID 0 and outer points having ID 11.
+    This function is adapted from modelling_fca_Feng.py lines 1390-1405.
+    It generates a grid_size x grid_size matrix where each cell contains its "shell ID" 
+    in a concentric pattern, with center points having ID 0 and outer points having 
+    ID (grid_size//2 - 1).
     
-    Example for 24x24 grid:
+    Example for 8x8 grid:
         Position matrix (center region):
-        [[11, 11, 11, 10, 10, ..., 10, 11],
-         [11, 10,  9,  9,  8, ...,  9, 10, 11],
-         [11,  9,  8,  7,  6, ...,  7,  8,  9, 11],
-         ...
-         [11, 11, 11, 10, 10, ..., 10, 11]]
+        [[3, 3, 3, 3, 3, 3, 3, 3],
+         [3, 2, 2, 2, 2, 2, 2, 3],
+         [3, 2, 1, 1, 1, 1, 2, 3],
+         [3, 2, 1, 0, 0, 1, 2, 3],
+         [3, 2, 1, 0, 0, 1, 2, 3],
+         [3, 2, 1, 1, 1, 1, 2, 3],
+         [3, 2, 2, 2, 2, 2, 2, 3],
+         [3, 3, 3, 3, 3, 3, 3, 3]]
     
     Args:
-        grid_size: int, size of grid (default 24)
+        grid_size: int, size of grid (default from CCA_GRID_SIZE)
         device: torch.device or str
     
     Returns:
-        concentric_pos: (grid_size, grid_size) torch.LongTensor with position IDs [0-11]
+        concentric_pos: (grid_size, grid_size) torch.LongTensor with position IDs [0 to grid_size//2-1]
     """
     H = W = grid_size
     concentric_pos = torch.zeros(H, W, dtype=torch.int64, device=device)
     
+    # Calculate max shell ID based on grid size
+    max_shell_id = H // 2 - 1
+    
     # a pointer to assign concentric positions.
     pos_pt = [H // 2 - 1, W // 2 - 1, H // 2, W // 2]
-    for pos in range(11, -1, -1):
+    for pos in range(max_shell_id, -1, -1):
         concentric_pos[pos_pt[0]: pos_pt[2] + 1, pos_pt[1]] = pos
         concentric_pos[pos_pt[0]: pos_pt[2] + 1, pos_pt[3]] = pos
         concentric_pos[pos_pt[0], pos_pt[1]: pos_pt[3] + 1] = pos
@@ -130,7 +138,7 @@ def build_cca_position_ids(
     position_ids,
     point_token_pos,     # Adapted: img_token_pos → point_token_pos
     num_point_tokens,    # Adapted: New parameter, replaces IMG_TOKEN_LEN constant
-    concentric_pos,      # Adapted: Passed as parameter for reusability
+    concentric_pos,      # Adapted: Can be 2D matrix (H, W) OR 1D tensor (N,) for point cloud
     device,
     seq_len,
     past_key_values=None
@@ -142,6 +150,7 @@ def build_cca_position_ids(
     1. Handles variable number of point tokens (vs fixed 576 image tokens)
     2. Accounts for <point_start> token offset (+1)
     3. Processes single sample instead of batched samples
+    4. Supports both 2D grid (image) and 1D token positions (point cloud)
     
     Sequence structure in SpatialLM:
         [text] <point_start> [P1, P2, ..., Pn] <point_end> [text]
@@ -155,7 +164,9 @@ def build_cca_position_ids(
         point_token_pos: int, position of <point_start> token
                          If -1, this is text-only (no point cloud)
         num_point_tokens: int, number of point cloud tokens
-        concentric_pos: (H, W) concentric position matrix
+        concentric_pos: EITHER:
+                        - (H, W) 2D concentric position matrix (for images, 576 tokens)
+                        - (N,) 1D tensor of CCA positions per token (for point clouds, variable N)
         device: torch.device
         seq_len: int, total sequence length after embedding fusion
         past_key_values: optional, for generation mode
@@ -163,7 +174,21 @@ def build_cca_position_ids(
     Returns:
         cca_position_ids: (seq_len,) torch.LongTensor with CCA-modified position IDs
     """
-    H = concentric_pos.shape[0]
+    # Detect whether concentric_pos is 2D (image) or 1D (point cloud)
+    if concentric_pos.dim() == 2:
+        # Image tokens: 2D grid (H, W)
+        H = concentric_pos.shape[0]
+        token_cca_positions = concentric_pos.flatten()  # (H*W,) = (576,)
+    elif concentric_pos.dim() == 1:
+        # Point cloud tokens: 1D tensor (N,) where N = num_point_tokens
+        token_cca_positions = concentric_pos  # (N,) e.g., (507,)
+        H = CCA_GRID_SIZE  # Use global CCA_GRID_SIZE for offset calculation
+        assert token_cca_positions.shape[0] == num_point_tokens, (
+            f"concentric_pos length ({token_cca_positions.shape[0]}) must match "
+            f"num_point_tokens ({num_point_tokens})"
+        )
+    else:
+        raise ValueError(f"concentric_pos must be 1D or 2D, got {concentric_pos.dim()}D")
     
     # Text only (no point cloud)
     if point_token_pos == -1:
@@ -182,26 +207,28 @@ def build_cca_position_ids(
     
     # Prefill mode (encoding)
     if point_token_pos > seq_len - num_point_tokens:
-        # Fallback: point cloud region is truncated, use standard position IDs
-        cca_position_ids = torch.arange(seq_len, dtype=torch.long, device=device)
-    else:
-        # Construct CCA position IDs:
-        # [text before] + [<point_start>] + [CCA positions for points] + [text after]
-        cca_position_ids = torch.cat([
-            # Text before point cloud + <point_start> token
-            torch.arange(0, point_token_pos + 1, device=device),
-            
-            # Point cloud tokens: use concentric positions + offset
-            # +1 offset because point tokens start AFTER <point_start>
-            concentric_pos.flatten() + point_token_pos + 1,
-            
-            # Text after point cloud (offset by max concentric position)
-            torch.arange(
-                point_token_pos + 1 + H // 2,  # Start after concentric positions
-                seq_len - num_point_tokens + H // 2,
-                device=device
-            )
-        ]).to(torch.long)
+        raise RuntimeError(
+            f"Point cloud region is truncated: point_token_pos={point_token_pos}, "
+            f"seq_len={seq_len}, num_point_tokens={num_point_tokens}"
+        )
+    
+    # Construct CCA position IDs:
+    # [text before] + [<point_start>] + [CCA positions for points] + [text after]
+    cca_position_ids = torch.cat([
+        # Text before point cloud + <point_start> token
+        torch.arange(0, point_token_pos + 1, device=device),
+        
+        # Point cloud tokens: use concentric positions + offset
+        # +1 offset because point tokens start AFTER <point_start>
+        token_cca_positions + point_token_pos + 1,
+        
+        # Text after point cloud (offset by max concentric position)
+        torch.arange(
+            point_token_pos + 1 + H // 2,  # Start after concentric positions
+            seq_len - num_point_tokens + H // 2,
+            device=device
+        )
+    ]).to(torch.long)
     
     return cca_position_ids
 
@@ -234,7 +261,7 @@ def build_cca_attention_mask(
     - Gradually "open" attention in concentric shells:
       * Shell 0 (center): points can only see themselves
       * Shell 1: points can see shell 0 and shell 1
-      * Shell 11 (outer): points can see all shells [0-11]
+      * Shell (grid_size//2 - 1) (outer): points can see all shells [0 to grid_size//2-1]
     - This creates a hierarchical spatial attention pattern
     
     Args:
@@ -246,7 +273,7 @@ def build_cca_attention_mask(
         seq_len: int
         device: torch.device
         dtype: torch.dtype
-        grid_size: int, CCA grid size (default 24)
+        grid_size: int, CCA grid size (default from CCA_GRID_SIZE)
     
     Returns:
         cca_attention_mask: (B, 1, seq_len, seq_len) attention mask with CCA applied
@@ -275,9 +302,13 @@ def build_cca_attention_mask(
         if point_token_pos == -1:
             continue
         
-        # Skip if point cloud region is truncated
+        # Validate point cloud region
         if point_token_pos > seq_len - num_point_tokens:
-            continue
+            raise RuntimeError(
+                f"Point cloud region is truncated in attention mask construction: "
+                f"point_token_pos={point_token_pos}, seq_len={seq_len}, "
+                f"num_point_tokens={num_point_tokens}"
+            )
         
         # === KEY ADAPTATION: Point cloud token indexing ===
         # In modelling_fca_Feng.py: image tokens are at [img_token_pos : img_token_pos + 576]
@@ -294,7 +325,7 @@ def build_cca_attention_mask(
         ] = float('-inf') * torch.ones((num_point_tokens, num_point_tokens), device=device)
         
         # Step 2: Gradually open concentric shells
-        # For each shell position [0, 1, 2, ..., 11]:
+        # For each shell position [0, 1, 2, ..., grid_size//2-1]:
         for pos in torch.arange(point_token_pos + 1, point_token_pos + 1 + H // 2):
             # Find all keys with position <= current pos (can be attended to)
             k_pos = torch.nonzero(
