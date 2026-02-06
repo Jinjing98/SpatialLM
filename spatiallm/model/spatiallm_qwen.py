@@ -133,6 +133,46 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
     def get_model(self):
         return self.model
 
+    # JJ HACK: explicitly 1D RoPE: generate position_ids based on attention_mask and past_key_values
+    # ///////////////////////////////////////
+    def _debug_position_ids_gen(self, attention_mask, past_key_values, inputs_embeds_shape, device):
+        # Debug information
+        # Generate position_ids based on inputs_embeds length, not attention_mask
+        # During generation: inputs_embeds is [batch, 1, hidden] but attention_mask is [batch, cache_len+1]
+        # batch_size, seq_len = inputs_embeds.shape[0], inputs_embeds.shape[1]
+        batch_size, seq_len = inputs_embeds_shape
+        # Check if we have valid cached key-values
+        has_cache = False
+        cache_length = 0
+        if past_key_values is not None:
+            try:
+                if hasattr(past_key_values, 'get_seq_length'):
+                    cache_length = past_key_values.get_seq_length()
+                    has_cache = cache_length > 0
+                elif len(past_key_values) > 0:
+                    cache_length = past_key_values[0][0].shape[2]
+                    has_cache = True
+            except (IndexError, KeyError, AttributeError):
+                has_cache = False
+                cache_length = 0
+        
+        if not has_cache:
+            # First forward pass: position_ids based on cumsum of attention_mask
+            position_ids_explicit_dbg = (attention_mask.long().cumsum(-1) - 1).masked_fill_(attention_mask == 0, 0)
+            # But only keep the positions for the current inputs_embeds
+            position_ids_explicit_dbg = position_ids_explicit_dbg[:, :seq_len]
+        else:
+            # Subsequent generation: position_ids start from cache_length
+            position_ids_explicit_dbg = torch.arange(
+                cache_length, cache_length + seq_len,
+                dtype=torch.long,
+                device=device
+            ).unsqueeze(0).expand(batch_size, -1)
+        print(f'[DftPE] position_ids_explicit_dbg: {position_ids_explicit_dbg.shape}')
+        # print(f'[DftPE] position_ids_explicit_dbg: {position_ids_explicit_dbg[:10]}')
+        # ///////////////////////////////////////
+        return position_ids_explicit_dbg
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -206,6 +246,7 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             and (input_ids.shape[1] != 1 or self.training)
             and point_clouds is not None
         ):
+            print(f'[DftPE] This is the prefill stage with input_ids shape: {input_ids.shape}')
             n_point_clouds = point_clouds.shape[0]
             point_features = []
             for i in range(n_point_clouds):  # * iterate over batch
@@ -301,19 +342,19 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             ), "The length of attention mask and inputs embeds should be the same"
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        assert position_ids is None
-        print(f'[DftPE] position_ids is None for dftqwen---it will internally use the one from .generate() based on attn mask.')
+        assert position_ids is None, f'position_ids is None for dft. we make it explicit in _debug_position_ids_gen'
         outputs = self.model(
             input_ids=None,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
+            attention_mask=attention_mask,# only have dim of text_token_dim+accu_next_text_token_dim 1 during net token gen.. The attn for pcd does not saved here during net token gen.
+            position_ids=position_ids,# JJ. by default None. It leverge the attn_mask in PREFILL to first constuct, then keep append during next token gen.
+            # position_ids=self._debug_position_ids_gen(attention_mask, past_key_values, inputs_embeds.shape[:2], inputs_embeds.device),# JJ HACK: explicitly generate position_ids based on the same strategy. should be the same
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            cache_position=cache_position,
+            cache_position=None,  # Set to None to let position_ids take full control
         )
 
         hidden_states = outputs[0]
@@ -423,6 +464,13 @@ if __name__ == "__main__":
 # [DftPE] cur_input_ids:  torch.Size([221])
 # [DftPE] point_start_token_id/point_end_token_id:  151652 151653
 # [DftPE] point_start_token_pos:  tensor(14, device='cuda:0') point_end_token_pos:  tensor(16, device='cuda:0')
-# [DftPE] cur_new_input_embeds:  torch.Size([727, 896])
+# [DftPE] cur_new_input_embeds:  torch.Size([727, 896]) #507+(221-1)
 # [DftPE] cur_new_attention_mask:  torch.Size([727])
 # [DftPE] max_num_tokens in the batch with b_size1:  727
+# [DftPE] attention_mask: torch.Size([1, 727]) True
+# [DftPE] attention_mask: torch.Size([1, 222]) True
+# [DftPE] attention_mask: torch.Size([1, 223]) True
+# ......
+# [DftPE] attention_mask: torch.Size([1, 718]) True
+# [DftPE] attention_mask: torch.Size([1, 719]) True
+# [DftPE] attention_mask: torch.Size([1, 720]) True
