@@ -15,7 +15,7 @@ python inference.py \
 --model_path ysmao/SpatialLM1.1-Qwen-0.5B-Arkitscenes-SFT \
 --disable_flash_attn \
 --disable_do_sample \
-# --VLM_PE CCA_2DProj \
+--VLM_PE CCA_2DProj \
 
 # # # Convert the predicted layout to Rerun format
 # run below on my local 

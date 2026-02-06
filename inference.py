@@ -304,18 +304,46 @@ if __name__ == "__main__":
     
     # Load and modify config if needed
     from transformers import AutoConfig
+    
     config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
+    original_model_type = config.model_type
+    
+    # Modify config
     if args.disable_flash_attn and hasattr(config, 'point_config'):
         config.point_config['enable_flash'] = False
     if args.VLM_PE is not None:
         config.VLM_PE = args.VLM_PE
     
-    # Load model
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        config=config,
-        torch_dtype=getattr(torch, args.inference_dtype)
-    )
+    # Load model based on VLM_PE type
+    if args.VLM_PE == "CCA_2DProj":
+        # Use CCA model
+        from spatiallm.model.spatiallm_qwen_cca_v0 import CCASpatialLMQwenForCausalLM
+        print(f"[Inference] Using CCA model with VLM_PE={args.VLM_PE}")
+        print(f"[Inference] Loading CCASpatialLMQwenForCausalLM...")
+        
+        # Change config to CCA type
+        config.model_type = "cca_spatiallm_qwen"
+        
+        # Directly instantiate CCA model and load weights
+        model = CCASpatialLMQwenForCausalLM.from_pretrained(
+            args.model_path,
+            config=config,
+            torch_dtype=getattr(torch, args.inference_dtype),
+            trust_remote_code=True
+        )
+    else:
+        # Use default model
+        assert original_model_type in ["spatiallm_qwen"]
+        print(f"[Inference] Using default model with model_type={original_model_type}")
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            config=config,
+            torch_dtype=getattr(torch, args.inference_dtype),
+            trust_remote_code=True
+        )
+    
+    print(f"[Inference] Loaded model class: {model.__class__.__name__}")
+    
     model.to("cuda")
     model.set_point_backbone_dtype(torch.float32)
     model.eval()
