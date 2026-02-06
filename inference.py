@@ -63,6 +63,7 @@ def generate_layout(
     max_new_tokens=4096,
     detect_type="all",
     categories=[],
+    do_sample=True,
 ):
     if seed >= 0:
         set_seed(seed)
@@ -79,7 +80,7 @@ def generate_layout(
     prompt = f"<|point_start|><|point_pad|><|point_end|>{task_prompt} The reference code is as followed: {code_template}"
 
     # prepare the conversation data
-    if model.config.model_type == "spatiallm_qwen":
+    if model.config.model_type in ["spatiallm_qwen", "cca_spatiallm_qwen"]:
         conversation = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
@@ -100,7 +101,7 @@ def generate_layout(
         {"input_ids": input_ids, "point_clouds": point_cloud},
         streamer=streamer,
         max_new_tokens=max_new_tokens,
-        do_sample=True,
+        do_sample=do_sample,
         use_cache=True,
         temperature=temperature,
         top_p=top_p,
@@ -290,32 +291,31 @@ if __name__ == "__main__":
         choices=[None, "CCA_2DProj"],
         help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection",
     )
+    parser.add_argument(
+        "--disable_do_sample",
+        default=False,
+        action="store_true",
+        help="Disable sampling and use greedy decoding (deterministic generation)",
+    )
     args = parser.parse_args()
 
-    # load the model
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     
-    # Check if we need to modify config
-    if args.disable_flash_attn or args.VLM_PE is not None:
-        from transformers import AutoConfig
-        config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
-        # Disable flash attention if requested
-        if args.disable_flash_attn:
-            if hasattr(config, 'point_config'):
-                config.point_config['enable_flash'] = False
-        # Set VLM_PE if specified
-        if args.VLM_PE is not None:
-            config.VLM_PE = args.VLM_PE
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_path, 
-            config=config,
-            torch_dtype=getattr(torch, args.inference_dtype)
-        )
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_path,
-            torch_dtype=getattr(torch, args.inference_dtype)
-        )
+    # Load and modify config if needed
+    from transformers import AutoConfig
+    config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
+    if args.disable_flash_attn and hasattr(config, 'point_config'):
+        config.point_config['enable_flash'] = False
+    if args.VLM_PE is not None:
+        config.VLM_PE = args.VLM_PE
+    
+    # Load model
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_path,
+        config=config,
+        torch_dtype=getattr(torch, args.inference_dtype)
+    )
     model.to("cuda")
     model.set_point_backbone_dtype(torch.float32)
     model.eval()
@@ -392,6 +392,7 @@ if __name__ == "__main__":
             seed=args.seed,
             detect_type=args.detect_type,
             categories=args.category,
+            do_sample=not args.disable_do_sample,
         )
         layout.translate(min_extent)
         pred_language_string = layout.to_language_string()
