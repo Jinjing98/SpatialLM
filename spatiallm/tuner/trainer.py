@@ -1,5 +1,9 @@
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+import os
+import sys
+import shutil
+import yaml
 import torch
 import torch.distributed as dist
 from transformers import Seq2SeqTrainer
@@ -39,6 +43,40 @@ if TYPE_CHECKING:
     )
 
 logger = logging.get_logger(__name__)
+
+
+# JJ: Helper function to save training configuration
+def save_training_config(output_dir: str, raw_args: Any) -> None:
+    """Save the training configuration to the output directory.
+    
+    Args:
+        output_dir: Directory to save the configuration files
+        raw_args: Raw arguments (dict or list) from command line
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+    
+    # Always save complete command-line arguments
+    if len(sys.argv) > 1:
+        cmdline_args_path = os.path.join(output_dir, 'commandline_args.txt')
+        with open(cmdline_args_path, 'w') as f:
+            f.write(' '.join(sys.argv[1:]))
+        logger.info_rank0(f"Saved command-line args to: {cmdline_args_path}")
+    
+    # Save the original YAML config if provided
+    if len(sys.argv) > 1 and (sys.argv[1].endswith('.yaml') or sys.argv[1].endswith('.yml')):
+        yaml_path = sys.argv[1]
+        if os.path.exists(yaml_path):
+            dest_path = os.path.join(output_dir, 'config.yaml')
+            shutil.copy2(yaml_path, dest_path)
+            logger.info_rank0(f"Saved original config to: {dest_path}")
+    
+    # Save the complete merged configuration (only when using YAML/JSON config)
+    if isinstance(raw_args, dict):
+        merged_config_path = os.path.join(output_dir, 'config_merged.yaml')
+        with open(merged_config_path, 'w') as f:
+            yaml.dump(raw_args, f, default_flow_style=False, sort_keys=False)
+        logger.info_rank0(f"Saved merged config to: {merged_config_path}")
 
 
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
@@ -179,6 +217,9 @@ def _training_function(config: dict[str, Any]) -> None:
     model_args, data_args, training_args, finetuning_args, generating_args = (
         get_train_args(args)
     )
+    
+    # JJ: Save training configuration before starting training
+    save_training_config(training_args.output_dir, args)
 
     callbacks: list[Any] = []
     callbacks.append(LogCallback())

@@ -63,6 +63,7 @@ def generate_layout(
     max_new_tokens=4096,
     detect_type="all",
     categories=[],
+    do_sample=True,
 ):
     if seed >= 0:
         set_seed(seed)
@@ -79,7 +80,7 @@ def generate_layout(
     prompt = f"<|point_start|><|point_pad|><|point_end|>{task_prompt} The reference code is as followed: {code_template}"
 
     # prepare the conversation data
-    if model.config.model_type == "spatiallm_qwen":
+    if model.config.model_type in ["spatiallm_qwen", "cca_spatiallm_qwen"]:
         conversation = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
@@ -100,7 +101,7 @@ def generate_layout(
         {"input_ids": input_ids, "point_clouds": point_cloud},
         streamer=streamer,
         max_new_tokens=max_new_tokens,
-        do_sample=True,
+        do_sample=do_sample,
         use_cache=True,
         temperature=temperature,
         top_p=top_p,
@@ -283,26 +284,81 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable FlashAttention (required for V100 or older GPUs)",
     )
+    parser.add_argument(
+        "--VLM_PE",
+        type=str,
+        default=None,
+        choices=[None, "CCA_2DProj"],
+        help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection",
+    )
+    parser.add_argument(
+        "--disable_do_sample",
+        default=False,
+        action="store_true",
+        help="Disable sampling and use greedy decoding (deterministic generation)",
+    )
     args = parser.parse_args()
 
-    # load the model
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     
-    if args.disable_flash_attn:
-        from transformers import AutoConfig
-        config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
-        if hasattr(config, 'point_config'):
-            config.point_config['enable_flash'] = False
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_path, 
+    # Load and modify config if needed
+    from transformers import AutoConfig
+    
+    config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
+    original_model_type = config.model_type
+    
+    # Modify config
+    if args.disable_flash_attn and hasattr(config, 'point_config'):
+        config.point_config['enable_flash'] = False
+    if args.VLM_PE is not None:
+        config.VLM_PE = args.VLM_PE
+    
+    # Load model based on VLM_PE type
+    if args.VLM_PE == "CCA_2DProj":
+        # Use CCA model
+        from spatiallm.model.spatiallm_qwen_cca_v0 import CCASpatialLMQwenForCausalLM
+        print(f"[Inference] Using CCA model with VLM_PE={args.VLM_PE}")
+        print(f"[Inference] Loading CCASpatialLMQwenForCausalLM...")
+        
+        # Change config to CCA type
+        config.model_type = "cca_spatiallm_qwen"
+        
+        # JJ: Add CCA configs if not present in pretrained model config
+        if not hasattr(config, 'cca_configs'):
+            config.cca_configs = {
+                'grid_size': 24,
+                'projection': 'top_down',
+                'pcd_norm_method': 'adaptiveNorm'
+            }
+            print(f"\n{'='*80}")
+            print(f"[WARNING] Loaded model does not have 'cca_configs' in its config.")
+            print(f"[WARNING] Using default cca_configs: {config.cca_configs}")
+            print(f"[WARNING] Performance may be unexpected if the model was not trained with these settings!")
+            print(f"{'='*80}\n")
+        else:
+            print(f"[Inference] Using cca_configs from loaded model: {config.cca_configs}")
+        
+        # Directly instantiate CCA model and load weights
+        model = CCASpatialLMQwenForCausalLM.from_pretrained(
+            args.model_path,
             config=config,
-            torch_dtype=getattr(torch, args.inference_dtype)
+            torch_dtype=getattr(torch, args.inference_dtype),
+            trust_remote_code=True
         )
     else:
+        # Use default model
+        assert original_model_type in ["spatiallm_qwen"]
+        print(f"[Inference] Using default model with model_type={original_model_type}")
         model = AutoModelForCausalLM.from_pretrained(
             args.model_path,
-            torch_dtype=getattr(torch, args.inference_dtype)
+            config=config,
+            torch_dtype=getattr(torch, args.inference_dtype),
+            trust_remote_code=True
         )
+    
+    print(f"[Inference] Loaded model class: {model.__class__.__name__}")
+    
     model.to("cuda")
     model.set_point_backbone_dtype(torch.float32)
     model.eval()
@@ -379,6 +435,7 @@ if __name__ == "__main__":
             seed=args.seed,
             detect_type=args.detect_type,
             categories=args.category,
+            do_sample=not args.disable_do_sample,
         )
         layout.translate(min_extent)
         pred_language_string = layout.to_language_string()

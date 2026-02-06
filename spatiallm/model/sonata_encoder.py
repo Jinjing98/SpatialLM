@@ -830,6 +830,7 @@ class Sonata(PointModule, PyTorchModelHubMixin):
         enc_mode=True,
         enable_fourier_encode=False,
         num_bins=1280,
+        pcd_norm_method="adaptiveNorm",
     ):
         super().__init__()
 
@@ -919,6 +920,7 @@ class Sonata(PointModule, PyTorchModelHubMixin):
 
         # fourier encode positional embedding inaddition to Sonata
         self.enable_fourier_encode = enable_fourier_encode
+        self.pcd_norm_method = pcd_norm_method  # Point cloud normalization method for CCA
         downconvs = len(enc_channels) - 1
         res_reduction = 2**downconvs  # voxel resolution reduction
         self.reduced_grid_size = int(num_bins / res_reduction)
@@ -928,7 +930,7 @@ class Sonata(PointModule, PyTorchModelHubMixin):
             else None
         )  # 63 for fourier encoding
 
-    def forward(self, data_dict):
+    def forward(self, data_dict, return_coords=False):
         point = Point(data_dict)
         point = self.embedding(point)
 
@@ -938,12 +940,33 @@ class Sonata(PointModule, PyTorchModelHubMixin):
         point = self.enc(point) # internal PE in Block (Sonata Encoder)
         context = point["sparse_conv_feat"].features
 
-        if self.enable_fourier_encode:
-            coords = point["grid_coord"]
-            coords_normalised = coords / (self.reduced_grid_size - 1)
-            encoded_coords = fourier_encode_vector(coords_normalised)
+        # Get normalized coordinates of encoded tokens (for CCA projection)
+        print('Self.reduced_grid_size: ', self.reduced_grid_size)
+        # Use actual coordinate range for better spatial distribution in CCA
+        grid_coord = point["grid_coord"].float()
+        
+        # JJ: Choose normalization method based on config
+        if self.pcd_norm_method == "adaptiveNorm":
+            # adaptiveNorm: normalize based on actual min/max of current point cloud
+            # This ensures better spread across CCA grid shells
+            coord_min = grid_coord.min(dim=0, keepdim=True)[0]
+            coord_max = grid_coord.max(dim=0, keepdim=True)[0]
+            coord_range = coord_max - coord_min
+            coord_range = torch.clamp(coord_range, min=1.0)  # Avoid division by zero
+            coords_normalised = (grid_coord - coord_min) / coord_range
+        elif self.pcd_norm_method == "gridsizeNorm":
+            # gridsizeNorm: normalize based on grid size (CCA pos can be constrained)
+            coords_normalised = grid_coord / (self.reduced_grid_size - 1)
+        else:
+            raise ValueError(f"Unknown pcd_norm_method: {self.pcd_norm_method}. Expected 'adaptiveNorm' or 'gridsizeNorm'.")
 
+        if self.enable_fourier_encode:
+            # Use the same normalized coords for fourier encoding
+            encoded_coords = fourier_encode_vector(coords_normalised)
             context = torch.cat([context, encoded_coords], dim=-1)
             context = self.input_proj(context)
 
+        # JJ
+        if return_coords:
+            return context, coords_normalised
         return context

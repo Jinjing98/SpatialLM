@@ -140,17 +140,56 @@ def load_model(
     init_kwargs = _get_init_kwargs(model_args)
     config = load_config(model_args)
     config.point_config["num_bins"] = data_args.num_bins
+    
+    # JJ: Set VLM_PE in config if specified
+    if model_args.VLM_PE is not None:
+        config.VLM_PE = model_args.VLM_PE
+        logger.info_rank0(f"[Training] VLM_PE set to: {model_args.VLM_PE}")
+    
+    # JJ: Set cca_configs in config if specified
+    if hasattr(model_args, 'cca_configs') and model_args.cca_configs is not None:
+        config.cca_configs = model_args.cca_configs
+        logger.info_rank0(f"[Training] CCA configs set to: {model_args.cca_configs}")
+    
+    # JJ: Handle disable_flash_attn flag
+    if hasattr(model_args, 'disable_flash_attn') and model_args.disable_flash_attn:
+        # Disable flash attention in point encoder config
+        if "enable_flash" in config.point_config:
+            config.point_config["enable_flash"] = False
+            logger.info_rank0(f"[Training] Flash attention disabled in point encoder (disable_flash_attn={model_args.disable_flash_attn})")
+        # Set flag in main config for model-level flash attention control
+        config.disable_flash_attn = True
+        logger.info_rank0(f"[Training] Flash attention disabled at model level")
+    
     patch_config(config, model_args, init_kwargs, is_trainable)
 
     init_kwargs["config"] = config
     init_kwargs["pretrained_model_name_or_path"] = model_args.model_name_or_path
 
-    if model_args.train_from_scratch:
-        model = AutoModelForCausalLM.from_config(
-            config, trust_remote_code=model_args.trust_remote_code
-        )
+    # JJ: Load CCA model if VLM_PE is CCA_2DProj
+    if model_args.VLM_PE == "CCA_2DProj":
+        from spatiallm.model.spatiallm_qwen_cca_v0 import CCASpatialLMQwenForCausalLM
+        logger.info_rank0(f"[Training] Using CCA model with VLM_PE={model_args.VLM_PE}")
+        
+        # Change config to CCA type
+        original_model_type = config.model_type
+        config.model_type = "cca_spatiallm_qwen"
+        
+        if model_args.train_from_scratch:
+            model = CCASpatialLMQwenForCausalLM(config)
+        else:
+            model = CCASpatialLMQwenForCausalLM.from_pretrained(**init_kwargs)
+        
+        logger.info_rank0(f"[Training] Loaded CCASpatialLMQwenForCausalLM (original type: {original_model_type})")
     else:
-        model = AutoModelForCausalLM.from_pretrained(**init_kwargs)
+        # VLM_PE is None - use default model
+        logger.info_rank0(f"[Training] Using default model (VLM_PE=None)")
+        if model_args.train_from_scratch:
+            model = AutoModelForCausalLM.from_config(
+                config, trust_remote_code=model_args.trust_remote_code
+            )
+        else:
+            model = AutoModelForCausalLM.from_pretrained(**init_kwargs)
 
     patch_model(model, model_args, is_trainable)
     register_autoclass(config, model, tokenizer)

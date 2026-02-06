@@ -18,6 +18,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -192,6 +193,20 @@ def get_train_args(
         data_args.eval_num_beams or training_args.generation_num_beams
     )
     training_args.remove_unused_columns = False  # important for multimodal dataset
+    
+    # JJ: Auto-append experiment name to output_dir
+    # If expname not provided: uses timestamp MMDDHHMM
+    # If expname provided: uses {expname}_MMDDHHMM
+    timestamp = time.strftime('%m%d%H%M')
+    if finetuning_args.expname:
+        exp_name = f"{finetuning_args.expname}_{timestamp}"
+    else:
+        exp_name = timestamp
+    base_output_dir = training_args.output_dir
+    training_args.output_dir = os.path.join(base_output_dir, exp_name)
+    logger.info_rank0(f"Experiment name: {exp_name}")
+    logger.info_rank0(f"Output directory: {training_args.output_dir}")
+    
     can_resume_from_checkpoint = True
 
     if (

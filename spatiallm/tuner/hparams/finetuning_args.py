@@ -80,6 +80,16 @@ class FinetuningArguments(SwanLabArguments):
         default=False,
         metadata={"help": "Whether or not to train the projector only."},
     )
+    # JJ
+    expname: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Experiment name prefix. If not provided, uses timestamp (MMDDHHMM). "
+                "If provided, format will be {expname}_MMDDHHMM."
+            )
+        },
+    )
 
     def to_dict(self) -> dict[str, Any]:
         args = asdict(self)

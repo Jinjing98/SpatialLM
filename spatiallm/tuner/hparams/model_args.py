@@ -211,9 +211,40 @@ class ModelArguments(
             "help": "Whether use block diag attention or not, derived from `neat_packing`. Do not specify it."
         },
     )
+    # JJ
+    VLM_PE: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection."
+        },
+    )
+    disable_flash_attn: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to disable flash attention. If True, uses standard attention implementation."
+        },
+    )
+    cca_configs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "CCA (Concentric Causal Attention) configuration dictionary. Keys: grid_size (int, default: 24), projection (str, default: 'top_down', options: 'top_down'/'front'/'side'), pcd_norm_method (str, default: 'adaptiveNorm', options: 'adaptiveNorm'/'gridsizeNorm')."
+        },
+    )
 
     def __post_init__(self):
         BaseModelArguments.__post_init__(self)
+        
+        # Set CCA default configs if not provided
+        if self.cca_configs is None:
+            self.cca_configs = {}
+        
+        # Apply defaults for missing keys
+        if "grid_size" not in self.cca_configs:
+            self.cca_configs["grid_size"] = 24
+        if "projection" not in self.cca_configs:
+            self.cca_configs["projection"] = "top_down"
+        if "pcd_norm_method" not in self.cca_configs:
+            self.cca_configs["pcd_norm_method"] = "adaptiveNorm"
 
     @classmethod
     def copyfrom(cls, source: "Self", **kwargs) -> "Self":
