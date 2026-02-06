@@ -230,6 +230,7 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                     .squeeze(0)
                 )
                 num_patches = cur_point_features.shape[0]  # * number of point tokens
+                print('[DftPE] point_features num_patches: ', num_patches)
                 num_point_start_tokens = (
                     (cur_input_ids == self.config.point_start_token_id).sum().item()
                 )
@@ -241,12 +242,15 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                     "The number of point start tokens and point end tokens should be 1, "
                     f"but got {num_point_start_tokens} and {num_point_end_tokens}."
                 )
+                print('[DftPE] cur_input_ids: ',cur_input_ids.shape)
                 point_start_token_pos = torch.where(
                     cur_input_ids == self.config.point_start_token_id
                 )[0][0]
                 point_end_token_pos = torch.where(
                     cur_input_ids == self.config.point_end_token_id
                 )[0][0]
+                print('[DftPE] point_start_token_id/point_end_token_id: ', self.config.point_start_token_id, self.config.point_end_token_id)
+                print('[DftPE] point_start_token_pos: ', point_start_token_pos, 'point_end_token_pos: ', point_end_token_pos)
                 cur_new_input_embeds = torch.cat(
                     (
                         cur_input_embeds[: point_start_token_pos + 1],
@@ -263,6 +267,8 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                     ),
                     dim=0,
                 )
+                print('[DftPE] cur_new_input_embeds: ', cur_new_input_embeds.shape)
+                print('[DftPE] cur_new_attention_mask: ', cur_new_attention_mask.shape)
 
                 cur_point_idx += 1
                 new_input_embeds.append(cur_new_input_embeds)
@@ -272,6 +278,8 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 )
                 if cur_new_input_embeds.shape[0] > max_num_tokens:
                     max_num_tokens = cur_new_input_embeds.shape[0]
+            print(f'[DftPE] max_num_tokens in the batch with b_size{n_point_clouds}: ', max_num_tokens)
+            
             # pad the new input embeds and attention mask to the max dimension
             for i in range(len(new_input_embeds)):
                 cur_input_embeds = new_input_embeds[i]
@@ -293,6 +301,8 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             ), "The length of attention mask and inputs embeds should be the same"
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        assert position_ids is None
+        print(f'[DftPE] position_ids is None for dftqwen---it will internally use the one from .generate() based on attn mask.')
         outputs = self.model(
             input_ids=None,
             attention_mask=attention_mask,
@@ -395,3 +405,24 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
 
 AutoConfig.register("spatiallm_qwen", SpatialLMQwenConfig)
 AutoModelForCausalLM.register(SpatialLMQwenConfig, SpatialLMQwenForCausalLM)
+
+
+if __name__ == "__main__":
+    pass
+# arkitscene 40753679
+# [DftPE] point_features num_patches:  556
+# [DftPE] cur_input_ids:  torch.Size([221])
+# [DftPE] point_start_token_id/point_end_token_id:  151652 151653
+# [DftPE] point_start_token_pos:  tensor(14, device='cuda:0') point_end_token_pos:  tensor(16, device='cuda:0')
+# [DftPE] cur_new_input_embeds:  torch.Size([776, 896])
+# [DftPE] cur_new_attention_mask:  torch.Size([776])
+# [DftPE] max_num_tokens in the batch with b_size1:  776
+
+# arkitscene 40753686
+# [DftPE] point_features num_patches:  507
+# [DftPE] cur_input_ids:  torch.Size([221])
+# [DftPE] point_start_token_id/point_end_token_id:  151652 151653
+# [DftPE] point_start_token_pos:  tensor(14, device='cuda:0') point_end_token_pos:  tensor(16, device='cuda:0')
+# [DftPE] cur_new_input_embeds:  torch.Size([727, 896])
+# [DftPE] cur_new_attention_mask:  torch.Size([727])
+# [DftPE] max_num_tokens in the batch with b_size1:  727
