@@ -211,6 +211,19 @@ class ModelArguments(
             "help": "Whether use block diag attention or not, derived from `neat_packing`. Do not specify it."
         },
     )
+    # JJ
+    VLM_PE: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection."
+        },
+    )
+    disable_flash_attn: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to disable flash attention. If True, uses standard attention implementation."
+        },
+    )
 
     def __post_init__(self):
         BaseModelArguments.__post_init__(self)

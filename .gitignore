@@ -165,4 +165,5 @@ cython_debug/
 *.lock
 *.txt
 *.rrd
-*.ply
+*.ply# CCA debug files
+cca_prefill_*.json
