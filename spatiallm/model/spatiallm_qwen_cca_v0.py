@@ -1,6 +1,7 @@
 # Copyright (c) Manycore Tech Inc. and affiliates.
 # All rights reserved.
 
+import json
 from typing import List, Optional, Tuple, Union
 
 import torch
@@ -35,6 +36,7 @@ from spatiallm.model.cca_utils import (
     build_cca_position_ids,
     build_cca_attention_mask,
     project_pointcloud_to_2d_grid,
+    analyze_cca_positions,
     CCA_GRID_SIZE,
 )
 
@@ -476,11 +478,21 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
 
             # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
             print(f'[CCA] cache_position is None: {cache_position == None}')
-            # save the PREFILL position_ids in json
-            import json
-            with open('cca_prefill_position_ids.json', 'w') as f:
-                json.dump(position_ids.cpu().tolist(), f)
+            
+            # Save the PREFILL position_ids and analyze CCA statistics
             print(f'[CCA] prefill position_ids: {position_ids.shape}')
+            json_path = 'cca_prefill_position_ids.json'
+            with open(json_path, 'w') as f:
+                json.dump(position_ids.cpu().tolist(), f)
+            
+            # # Analyze and save CCA statistics
+            # stats = analyze_cca_positions(json_path, verbose=False)
+            # stats_path = 'cca_prefill_stats.json'
+            # with open(stats_path, 'w') as f:
+            #     json.dump(stats, f, indent=2)
+            # print(f'[CCA] Saved position_ids to {json_path}')
+            # print(f'[CCA] Saved statistics to {stats_path}')
+            # print(f'[CCA] Point tokens: {stats.get("num_point_tokens", "N/A")}, Shells used: {stats.get("num_shells_used", "N/A")}')
 
         outputs = self.model(
             input_ids=None,

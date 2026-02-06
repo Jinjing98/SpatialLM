@@ -20,11 +20,16 @@ Key Differences from modelling_fca_Feng.py:
 Author: Adapted from modelling_fca_Feng.py
 """
 
+import json
+from collections import Counter
+from typing import Dict
+
 import torch
 
 # ============================================================================
 # Global CCA Configuration
 # ============================================================================
+# CCA_GRID_SIZE = 24  # 2D grid size for point cloud projection (8x8 = 64 cells)
 CCA_GRID_SIZE = 24  # 2D grid size for point cloud projection (8x8 = 64 cells)
                     # Note: Images use 24x24=576, but point clouds typically use fewer shells
 CCA_PROJECTION = "top_down"  # Orthographic projection direction
@@ -343,3 +348,154 @@ def build_cca_attention_mask(
                 cca_attention_mask[b_idx, 0, m_pos[:, 0], m_pos[:, 1]] = 0.0
     
     return cca_attention_mask
+
+
+# ============================================================================
+# CCA Analysis and Debugging Utilities
+# ============================================================================
+def analyze_cca_positions(json_path: str, verbose: bool = True) -> Dict:
+    """
+    Analyze CCA position IDs from a JSON file and report statistics.
+    
+    Args:
+        json_path: Path to JSON file containing position IDs (list of lists)
+        verbose: If True, print detailed statistics to console
+    
+    Returns:
+        Dictionary containing statistics about CCA shell distribution
+    """
+    with open(json_path, 'r') as f:
+        position_ids_batch = json.load(f)
+    
+    # Analyze first sequence in batch
+    pos_ids = position_ids_batch[0]
+    
+    # Get CCA configuration parameters
+    cca_grid_size = CCA_GRID_SIZE
+    cca_projection = CCA_PROJECTION
+    
+    # Build concentric position matrix to get available CCA positions
+    concentric_pos_matrix = build_concentric_position_matrix(grid_size=cca_grid_size)
+    cca_unique_positions = torch.unique(concentric_pos_matrix).tolist()
+    cca_min_pos = int(min(cca_unique_positions))
+    cca_max_pos = int(max(cca_unique_positions))
+    cca_num_unique_positions = len(cca_unique_positions)
+    
+    # Find point cloud token region (where positions don't increment by 1)
+    point_cloud_start = None
+    point_cloud_end = None
+    
+    for i in range(len(pos_ids) - 1):
+        if pos_ids[i+1] != pos_ids[i] + 1:
+            if point_cloud_start is None:
+                point_cloud_start = i + 1
+        elif point_cloud_start is not None and point_cloud_end is None:
+            point_cloud_end = i
+            break
+    
+    if point_cloud_start is None:
+        if verbose:
+            print("No CCA point cloud tokens detected (all positions sequential)")
+        return {
+            "has_cca": False,
+            "cca_config": {
+                "grid_size": cca_grid_size,
+                "projection": cca_projection,
+                "num_grid_cells": cca_grid_size * cca_grid_size,
+                "num_unique_positions": cca_num_unique_positions,
+                "num_unique_positions_formula": f"grid_size//2 = {cca_grid_size}//2 = {cca_grid_size//2}",
+                "position_range": [cca_min_pos, cca_max_pos],
+            }
+        }
+    
+    if point_cloud_end is None:
+        point_cloud_end = len(pos_ids)
+    
+    # Extract point cloud positions
+    point_positions = pos_ids[point_cloud_start:point_cloud_end]
+    num_point_tokens = len(point_positions)
+    
+    # Calculate CCA shell offset (first point token position)
+    shell_offset = pos_ids[point_cloud_start - 1] + 1
+    
+    # Count distribution
+    counter = Counter(point_positions)
+    
+    # Convert to shell IDs
+    shell_counter = {pos - shell_offset: count for pos, count in counter.items()}
+    
+    # Calculate actual CCA position range used
+    actual_positions_used = list(counter.keys())
+    min_position_used = min(actual_positions_used)
+    max_position_used = max(actual_positions_used)
+    position_range_span = max_position_used - min_position_used
+    middle_position = (min_position_used + max_position_used) / 2.0
+    
+    stats = {
+        "has_cca": True,
+        "cca_config": {
+            "grid_size": cca_grid_size,
+            "projection": cca_projection,
+            "num_grid_cells": cca_grid_size * cca_grid_size,
+            "num_unique_positions": cca_num_unique_positions,
+            "num_unique_positions_formula": f"grid_size//2 = {cca_grid_size}//2 = {cca_grid_size//2}",
+            "position_range": [cca_min_pos, cca_max_pos],
+        },
+        "cca_usage": {
+            "start_position": min_position_used,
+            "end_position": max_position_used,
+            "middle_position": middle_position,
+            "range_span": position_range_span,
+            "coverage_ratio": len(actual_positions_used) / cca_num_unique_positions,
+        },
+        "total_tokens": len(pos_ids),
+        "point_cloud_start": point_cloud_start,
+        "point_cloud_end": point_cloud_end,
+        "num_point_tokens": num_point_tokens,
+        "shell_offset": shell_offset,
+        "num_shells_used": len(shell_counter),
+        "min_shell": min(shell_counter.keys()),
+        "max_shell": max(shell_counter.keys()),
+        "shell_distribution": shell_counter,
+        "position_distribution": dict(counter),
+    }
+    
+    if verbose:
+        print("=" * 70)
+        print(f"CCA Position Analysis: {json_path}")
+        print("=" * 70)
+        cca_cfg = stats['cca_config']
+        print(f"CCA Configuration:")
+        print(f"  Grid Size: {cca_cfg['grid_size']}x{cca_cfg['grid_size']} = {cca_cfg['num_grid_cells']} cells")
+        print(f"  Projection: {cca_cfg['projection']}")
+        print(f"  Available CCA Positions (H//2): {cca_cfg['num_unique_positions']} (shells: [{cca_cfg['position_range'][0]}, {cca_cfg['position_range'][1]}])")
+        
+        cca_usage = stats['cca_usage']
+        print(f"\nCCA Position Usage:")
+        print(f"  Start Position: {cca_usage['start_position']}")
+        print(f"  Middle Position: {cca_usage['middle_position']:.1f}")
+        print(f"  End Position: {cca_usage['end_position']}")
+        print(f"  Range Span: {cca_usage['range_span']} positions")
+        print(f"  Coverage: {cca_usage['coverage_ratio']*100:.1f}% ({stats['num_shells_used']}/{cca_cfg['num_unique_positions']} shells used)")
+        
+        print(f"\nSequence Information:")
+        print(f"  Total tokens: {stats['total_tokens']}")
+        print(f"  Point cloud region: [{stats['point_cloud_start']}:{stats['point_cloud_end']}]")
+        print(f"  Point tokens: {stats['num_point_tokens']}")
+        print(f"  Shell offset: {stats['shell_offset']}")
+        print(f"\nCCA Shell Distribution:")
+        print("-" * 70)
+        
+        for shell_id in sorted(shell_counter.keys()):
+            count = shell_counter[shell_id]
+            pos_id = shell_id + shell_offset
+            percentage = (count / num_point_tokens) * 100
+            bar = '█' * min(50, count // max(1, num_point_tokens // 50))
+            print(f"Shell {shell_id:2d} (Pos {pos_id:2d}): {count:3d} tokens ({percentage:5.1f}%) {bar}")
+        
+        print("-" * 70)
+        print(f"Shells used: {stats['num_shells_used']} (from {stats['min_shell']} to {stats['max_shell']})")
+        print(f"Text continuation starts at position: {pos_ids[point_cloud_end]}")
+        print("=" * 70)
+    
+    return stats
