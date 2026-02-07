@@ -152,7 +152,122 @@ class RoPEAttention(Attention):
         x = self.proj_drop(x)
         
         return x
+
 if __name__ == "__main__":
-    x = torch.randn(1, 1024, 768)
-    model = RoPEAttention(dim=768, num_heads=12)
-    print(model(x).shape)
+    # JJ: Enhanced test to understand core design
+    print("="*80)
+    print("Testing RoPEAttention with detailed outputs")
+    print("="*80)
+    
+    # Configuration
+    batch_size = 2
+    seq_len = 197  # 1 CLS token + 196 spatial tokens (14x14)
+    dim = 768
+    num_heads = 12
+    head_dim = dim // num_heads
+    
+    print(f"\n[CONFIG]")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Sequence length: {seq_len} (1 CLS + {seq_len-1} spatial tokens)")
+    print(f"  Hidden dim: {dim}, Num heads: {num_heads}, Head dim: {head_dim}")
+    
+    # Test both modes
+    for rope_mixed in [True, False]:
+        print("\n" + "="*80)
+        mode_name = "MIXED RoPE (learnable per-head)" if rope_mixed else "AXIAL RoPE (standard)"
+        print(f"Testing {mode_name}")
+        print("="*80)
+        
+        # Create model
+        model = RoPEAttention(dim=dim, num_heads=num_heads, rope_theta=10.0, rope_mixed=rope_mixed)
+        
+        # Show learnable parameters
+        if rope_mixed:
+            print(f"\n[LEARNABLE FREQS]")
+            print(f"  freqs shape: {model.freqs.shape}")  # [2, num_heads * head_dim//2]
+            print(f"  freqs is flattened: [2, num_heads * (head_dim//2)] = [2, {num_heads * (head_dim//2)}]")
+            # Reshape to see per-head structure
+            freqs_reshaped = model.freqs.view(2, num_heads, head_dim//2)
+            print(f"  freqs reshaped: {freqs_reshaped.shape}")
+            print(f"  freqs_x[head 0, first 4 dims]: {freqs_reshaped[0, 0, :4]}")
+            print(f"  freqs_y[head 0, first 4 dims]: {freqs_reshaped[1, 0, :4]}")
+            print(f"  freqs_x[head 1, first 4 dims]: {freqs_reshaped[0, 1, :4]}")
+            print(f"  ↑ Each head has different frequencies (learnable)")
+            print(f"  Registered buffers: freqs_t_x shape={model.freqs_t_x.shape}, freqs_t_y shape={model.freqs_t_y.shape}")
+        else:
+            print(f"\n[STATIC FREQS]")
+            print(f"  freqs_cis shape: {model.freqs_cis.shape}")  # [196, head_dim]
+            print(f"  freqs_cis dtype: {model.freqs_cis.dtype}")
+        
+        # Create input
+        x = torch.randn(batch_size, seq_len, dim)
+        print(f"\n[INPUT]")
+        print(f"  x shape: {x.shape}")
+        
+        # Forward pass with intermediate outputs
+        print(f"\n[FORWARD PASS]")
+        B, N, C = x.shape
+        qkv = model.qkv(x).reshape(B, N, 3, num_heads, C // num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        print(f"  QKV shapes: q={q.shape}, k={k.shape}, v={v.shape}")
+        print(f"    Format: [B, num_heads, seq_len, head_dim]")
+        
+        # Compute position embeddings
+        w = h = math.sqrt(N - 1)
+        print(f"\n[POSITION ENCODING]")
+        print(f"  Spatial grid: {int(w)}x{int(h)}")
+        
+        if rope_mixed:
+            t_x, t_y = model.freqs_t_x, model.freqs_t_y
+            if model.freqs_t_x.shape[0] != N - 1:
+                t_x, t_y = init_t_xy(end_x=int(w), end_y=int(h))
+            print(f"  t_x shape: {t_x.shape}, sample: {t_x[:5]}")
+            print(f"  t_y shape: {t_y.shape}, sample: {t_y[:5]}")
+            
+            freqs_cis = model.compute_cis(model.freqs, t_x, t_y)
+            print(f"  freqs_cis shape after compute_mixed_cis: {freqs_cis.shape}")
+            print(f"    Format: [num_heads, num_spatial_tokens, head_dim//2]")
+        else:
+            freqs_cis = model.freqs_cis
+            if model.freqs_cis.shape[0] != N - 1:
+                freqs_cis = model.compute_cis(end_x=int(w), end_y=int(h))
+            print(f"  freqs_cis shape: {freqs_cis.shape}")
+            print(f"    Format: [num_spatial_tokens, head_dim]")
+        
+        # Apply RoPE (only to spatial tokens, skip CLS)
+        print(f"\n[ROPE APPLICATION]")
+        print(f"  Before RoPE - q[:,:,1:] shape: {q[:, :, 1:].shape}")
+        print(f"  Before RoPE - k[:,:,1:] shape: {k[:, :, 1:].shape}")
+        print(f"  CLS token (position 0) is NOT rotated")
+        
+        q_spatial = q[:, :, 1:]
+        k_spatial = k[:, :, 1:]
+        q_rotated, k_rotated = apply_rotary_emb(q_spatial, k_spatial, freqs_cis=freqs_cis)
+        
+        print(f"  After RoPE - q_rotated shape: {q_rotated.shape}")
+        print(f"  After RoPE - k_rotated shape: {k_rotated.shape}")
+        
+        # Check rotation effect
+        rotation_diff_q = (q_spatial - q_rotated).abs().mean().item()
+        rotation_diff_k = (k_spatial - k_rotated).abs().mean().item()
+        print(f"  Rotation effect (mean abs diff) - Q: {rotation_diff_q:.6f}, K: {rotation_diff_k:.6f}")
+        
+        # Full forward
+        output = model(x)
+        print(f"\n[OUTPUT]")
+        print(f"  Output shape: {output.shape}")
+        print(f"  Expected: {x.shape} (should match input)")
+        
+        print(f"\n[SUMMARY]")
+        if rope_mixed:
+            print(f"  ✓ Each attention head has unique learnable frequency parameters")
+            print(f"  ✓ Frequencies are trainable (requires_grad=True)")
+            print(f"  ✓ More expressive but more parameters")
+        else:
+            print(f"  ✓ All heads share the same frequency basis")
+            print(f"  ✓ Frequencies are fixed (standard RoPE)")
+            print(f"  ✓ Fewer parameters, standard axial approach")
+    
+    print("\n" + "="*80)
+    print("Test completed!")
+    print("="*80)
