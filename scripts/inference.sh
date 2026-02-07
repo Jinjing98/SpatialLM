@@ -3,7 +3,7 @@
 DATA_ROOT='/data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm/'
 DATA_ROOT='/mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm/'
 scene_name='40753679'
-scene_name='40753686'
+#scene_name='40753686'
 
 # suggest not to disble, as sonata was trained with enable. Performance will slightly diff.
 #--disable_flash_attn \
@@ -13,9 +13,9 @@ python inference.py \
 --model_path manycore-research/SpatialLM1.1-Qwen-0.5B \
 --model_path ysmao/SpatialLM1.1-Qwen-0.5B-Structured3D-SFT \
 --model_path ysmao/SpatialLM1.1-Qwen-0.5B-Arkitscenes-SFT \
---disable_flash_attn \
 --disable_do_sample \
---VLM_PE CCA_2DProj \
+--VLM_PE MixedRoPE3D \
+--disable_flash_attn \
 
 # # # Convert the predicted layout to Rerun format
 # run below on my local 

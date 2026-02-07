@@ -288,7 +288,7 @@ if __name__ == "__main__":
         "--VLM_PE",
         type=str,
         default=None,
-        choices=[None, "CCA_2DProj"],
+        choices=[None, "CCA_2DProj", "MixedRoPE3D"],
         help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection",
     )
     parser.add_argument(
@@ -331,7 +331,7 @@ if __name__ == "__main__":
             torch_dtype=getattr(torch, args.inference_dtype),
             trust_remote_code=True
         )
-    else:
+    elif args.VLM_PE == None:
         # Use default model
         assert original_model_type in ["spatiallm_qwen"]
         print(f"[Inference] Using default model with model_type={original_model_type}")
@@ -341,6 +341,22 @@ if __name__ == "__main__":
             torch_dtype=getattr(torch, args.inference_dtype),
             trust_remote_code=True
         )
+    elif args.VLM_PE == "MixedRoPE3D":
+        # Use MixedRoPE3D model
+        from spatiallm.model.spatiallm_qwen_mixedRoPE3d import MixedRoPE3DSpatialLMQwenForCausalLM
+        print(f"[Inference] Using MixedRoPE3D model with VLM_PE={args.VLM_PE}")
+        print(f"[Inference] Loading MixedRoPE3DSpatialLMQwenForCausalLM...")
+        
+        # Change config to MixedRoPE3D type
+        config.model_type = "mixedRoPE3d_spatiallm_qwen"
+        model = MixedRoPE3DSpatialLMQwenForCausalLM.from_pretrained(
+            args.model_path,
+            config=config,
+            torch_dtype=getattr(torch, args.inference_dtype),
+            trust_remote_code=True
+        )
+    else:
+        raise ValueError(f"Invalid VLM_PE: {args.VLM_PE}")
     
     print(f"[Inference] Loaded model class: {model.__class__.__name__}")
     
