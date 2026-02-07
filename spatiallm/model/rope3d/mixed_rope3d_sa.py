@@ -43,7 +43,6 @@ def init_3d_freqs_unified(dim: int, num_heads: int, theta: float = 10.0, rotate:
     
     freqs = torch.stack(freqs, dim=0)  # [num_heads, dim//2]
     print('init 3d freqs unified: ', freqs.shape)
-    print(freqs)
     return freqs
 
 # JJ: 3D normalization strategies
@@ -90,7 +89,8 @@ def compute_mixed_cis_3d(
     t_x: torch.Tensor, 
     t_y: torch.Tensor, 
     t_z: torch.Tensor,
-    num_heads: int
+    num_heads: int,
+    axial_weights: torch.Tensor = None
 ):
     """
     Compute mixed 3D RoPE frequencies for point clouds
@@ -101,15 +101,16 @@ def compute_mixed_cis_3d(
           Shape: freqs[0] → [num_heads, dim//4], freqs[1] → [num_heads, dim//4]
           Combined via concat in apply_rotary_emb
     
-    - 3D: freqs_cis = polar(1, freqs_x*t_x + freqs_y*t_y + freqs_z*t_z)
+    - 3D: freqs_cis = polar(1, w_x*freqs_x*t_x + w_y*freqs_y*t_y + w_z*freqs_z*t_z)
           where freqs_x, freqs_y, freqs_z share SAME frequency basis
           Shape: freqs[0/1/2] → [num_heads, dim//2] each
-          Combined via addition of coordinate-weighted frequencies
+          Combined via weighted addition of coordinate-weighted frequencies
     
     Args:
         freqs: [3, num_heads * (dim//2)] flattened frequency parameters
         t_x, t_y, t_z: [N] normalized coordinates
         num_heads: number of attention heads
+        axial_weights: [num_heads, dim//2, 3] learnable mixing weights per head per freq bin, or None for 1:1:1
     
     Returns:
         freqs_cis: [num_heads, N, dim//2] complex tensor
@@ -125,9 +126,30 @@ def compute_mixed_cis_3d(
         print('freqs_x shape: ', freqs_x.shape)
         print('freqs_y shape: ', freqs_y.shape)
         print('freqs_z shape: ', freqs_z.shape)
-        # JJ: KEY OPERATION - Addition combines 3D spatial information
-        # Each point's encoding = sum of x/y/z contributions
-        freqs_cis = torch.polar(torch.ones_like(freqs_x), freqs_x + freqs_y + freqs_z)
+        
+        # JJ: Apply learnable axial mixing weights if provided
+        if axial_weights is not None:
+            # axial_weights: [num_heads, dim//2, 3]
+            # freqs_x/y/z: [num_heads, N, dim//2]
+            # Extract per-axis, per-bin weights and reshape for broadcasting
+            w_x = axial_weights[:, :, 0].unsqueeze(1)  # [num_heads, 1, dim//2]
+            w_y = axial_weights[:, :, 1].unsqueeze(1)  # [num_heads, 1, dim//2]
+            w_z = axial_weights[:, :, 2].unsqueeze(1)  # [num_heads, 1, dim//2]
+            print('Applying learned axial weights (per-bin):')
+            print(f'  w_x shape: {w_x.shape}')
+            print(f'  w_y shape: {w_y.shape}')
+            print(f'  w_z shape: {w_z.shape}')
+            print(f'  Head 0, first 3 bins - w_x: {w_x[0, 0, :3]}')
+            print(f'  Head 0, first 3 bins - w_y: {w_y[0, 0, :3]}')
+            print(f'  Head 0, first 3 bins - w_z: {w_z[0, 0, :3]}')
+            freqs_combined = w_x * freqs_x + w_y * freqs_y + w_z * freqs_z
+        else:
+            print('Using fixed 1:1:1 axial mixing')
+            freqs_combined = freqs_x + freqs_y + freqs_z
+        
+        # JJ: KEY OPERATION - Weighted addition combines 3D spatial information
+        # Each point's encoding = weighted sum of x/y/z contributions (per freq bin)
+        freqs_cis = torch.polar(torch.ones_like(freqs_combined), freqs_combined)
         print('freqs_cis shape: ', freqs_cis.shape)
     return freqs_cis
 
@@ -264,12 +286,16 @@ class RoPEAttention_3D(Attention):
         norm_strategy="virtual_resolution",
         virtual_resolution=32.0,
         rope_mixed_learn_per_axis=True,  # JJ: Flag to control per-axis frequency learning
+        mixedRoPE_3d_learned_axial_mixing_weight=False,  # JJ: Flag to control learnable mixing weights
         **kwargs
     ):
         """
         Args:
             rope_mixed_learn_per_axis: If True, x/y/z axes have independent learnable frequencies.
                                 If False, all axes share the same frequency parameters.
+                                Only effective when rope_mixed=True.
+            mixedRoPE_3d_learned_axial_mixing_weight: If True, mixing weights (w_x, w_y, w_z) are learnable per head.
+                                If False, fixed 1:1:1 mixing ratio.
                                 Only effective when rope_mixed=True.
         """
         super().__init__(*args, **kwargs)
@@ -278,6 +304,7 @@ class RoPEAttention_3D(Attention):
         self.norm_strategy = norm_strategy
         self.virtual_resolution = virtual_resolution
         self.rope_mixed_learn_per_axis = rope_mixed_learn_per_axis
+        self.mixedRoPE_3d_learned_axial_mixing_weight = mixedRoPE_3d_learned_axial_mixing_weight
         
         if self.rope_mixed:
             self.compute_cis = partial(compute_mixed_cis_3d, num_heads=self.num_heads)
@@ -297,14 +324,29 @@ class RoPEAttention_3D(Attention):
                 # Add small random perturbation to make x/y/z initially different
                 freqs = freqs + torch.randn_like(freqs) * 0.01
                 freqs = freqs.view(3, -1)  # [3, num_heads * (dim//2)]
-                print('Learned param freqs shape (per-axis): ', freqs.shape)
+                print(f'Learned param freqs shape (per-axis) given head_num{self.num_heads}, head_dim{self.dim // self.num_heads}: ', freqs.shape)
                 self.freqs = nn.Parameter(freqs, requires_grad=True)
             else:
                 # JJ: Shared frequencies across x/y/z axes
                 # All axes use the SAME parameters (truly shared)
                 freqs_shared = freqs_base.view(1, -1)  # [1, num_heads * (dim//2)]
-                print('Learned param freqs shape (shared): ', freqs_shared.shape)
+                print('Learned param freqs shape (shared) given head_num{self.num_heads}, head_dim{self.dim // self.num_heads}: ', freqs_shared.shape)
                 self.freqs = nn.Parameter(freqs_shared, requires_grad=True)
+            
+            # JJ: Initialize learnable axial mixing weights if enabled
+            if self.mixedRoPE_3d_learned_axial_mixing_weight:
+                # Each head has independent (w_x, w_y, w_z) weights for EACH frequency bin
+                # Shape: [num_heads, dim//2, 3]
+                # Initialize as 1.0 + small noise for symmetry breaking
+                head_dim = self.dim // self.num_heads
+                num_freq_bins = head_dim // 2
+                axial_weights = torch.ones(self.num_heads, num_freq_bins, 3) + torch.randn(self.num_heads, num_freq_bins, 3) * 0.01
+                self.axial_weights = nn.Parameter(axial_weights, requires_grad=True)
+                print(f'Learned axial mixing weights shape (per-head, per-bin): {self.axial_weights.shape}')
+            else:
+                self.axial_weights = None
+                print('Using fixed 1:1:1 axial mixing weights')
+            
             print('done with init mixed rope 3d.')
         else:
             self.compute_cis = partial(compute_axial_cis_3d, dim=self.dim // self.num_heads, theta=rope_theta)
@@ -353,14 +395,14 @@ class RoPEAttention_3D(Attention):
                 # Independent frequencies for x/y/z
                 print('Using per-axis frequencies')
                 print('freqs shape: ', self.freqs.shape)
-                freqs_cis = self.compute_cis(self.freqs, t_x, t_y, t_z)
+                freqs_cis = self.compute_cis(self.freqs, t_x, t_y, t_z, axial_weights=self.axial_weights)
             else:
                 # Shared frequencies: replicate for x/y/z
                 print('Using shared frequencies')
                 print('freqs shape: ', self.freqs.shape)
                 freqs_shared = self.freqs.repeat(3, 1)  # [1, D] -> [3, D]
                 print('freqs_shared shape: ', freqs_shared.shape)
-                freqs_cis = self.compute_cis(freqs_shared, t_x, t_y, t_z)
+                freqs_cis = self.compute_cis(freqs_shared, t_x, t_y, t_z, axial_weights=self.axial_weights)
             print('freqs_cis shape: ', freqs_cis.shape)
         else:
             freqs_cis = self.compute_cis(t_x=t_x, t_y=t_y, t_z=t_z)
@@ -395,16 +437,18 @@ if __name__ == "__main__":
 
 
     
-    batch_size = 2
-    num_points = 1024
+    batch_size = 1
+    num_points = 10
     seq_len_3d = num_points
-    num_heads = 2
-    head_dim = 12
+    num_heads = 8
+    head_dim = 64
     dim = head_dim * num_heads
-    # rope_mixed=True
-    rope_mixed=False
+    rope_mixed=True
+    # rope_mixed=False
     rope_mixed_learn_per_axis = True
     # rope_mixed_learn_per_axis = False
+    mixedRoPE_3d_learned_axial_mixing_weight = True  # JJ: Test learnable mixing weights
+    # mixedRoPE_3d_learned_axial_mixing_weight = False
     norm_strategy = "virtual_resolution"
     virtual_res = 32.0
     rope_theta=10.0
@@ -423,7 +467,8 @@ if __name__ == "__main__":
         rope_mixed=rope_mixed,
         norm_strategy=norm_strategy,
         virtual_resolution=virtual_res,
-        rope_mixed_learn_per_axis=rope_mixed_learn_per_axis
+        rope_mixed_learn_per_axis=rope_mixed_learn_per_axis,
+        mixedRoPE_3d_learned_axial_mixing_weight=mixedRoPE_3d_learned_axial_mixing_weight
     )
     print(f"  Virtual resolution: {virtual_res}")
     
