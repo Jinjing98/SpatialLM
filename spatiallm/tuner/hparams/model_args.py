@@ -224,9 +224,51 @@ class ModelArguments(
             "help": "Whether to disable flash attention. If True, uses standard attention implementation."
         },
     )
+    cca_configs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "CCA (Concentric Causal Attention) configuration dictionary. Keys: grid_size (int, default: 24), projection (str, default: 'top_down', options: 'top_down'/'front'/'side'), pcd_norm_method (str, default: 'adaptiveNorm', options: 'adaptiveNorm'/'gridsizeNorm')."
+        },
+    )
+    mixedRoPE3D_configs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "MixedRoPE3D configuration dictionary. Keys: rope_theta_3d (float, default: 10000.0), rope_mixed (bool, default: True), norm_strategy (str, default: 'virtual_resolution'), virtual_resolution (float, default: 1.0), rope_mixed_learn_per_axis (bool, default: False), mixedRoPE_3d_learned_axial_mixing_weight (bool, default: False)."
+        },
+    )
 
     def __post_init__(self):
         BaseModelArguments.__post_init__(self)
+        
+        # Set CCA default configs if not provided
+        if self.cca_configs is None:
+            self.cca_configs = {}
+        
+        # Apply defaults for missing keys
+        if "grid_size" not in self.cca_configs:
+            self.cca_configs["grid_size"] = 24
+        if "projection" not in self.cca_configs:
+            self.cca_configs["projection"] = "top_down"
+        if "pcd_norm_method" not in self.cca_configs:
+            self.cca_configs["pcd_norm_method"] = "adaptiveNorm"
+        
+        # Set MixedRoPE3D default configs if not provided
+        if self.mixedRoPE3D_configs is None:
+            self.mixedRoPE3D_configs = {}
+        
+        # Apply defaults for missing keys
+        if "rope_theta_3d" not in self.mixedRoPE3D_configs:
+            self.mixedRoPE3D_configs["rope_theta_3d"] = 10000.0
+        if "rope_mixed" not in self.mixedRoPE3D_configs:
+            self.mixedRoPE3D_configs["rope_mixed"] = True
+        if "norm_strategy" not in self.mixedRoPE3D_configs:
+            self.mixedRoPE3D_configs["norm_strategy"] = "virtual_resolution"
+        if "virtual_resolution" not in self.mixedRoPE3D_configs:
+            self.mixedRoPE3D_configs["virtual_resolution"] = 1.0
+        if "rope_mixed_learn_per_axis" not in self.mixedRoPE3D_configs:
+            self.mixedRoPE3D_configs["rope_mixed_learn_per_axis"] = False
+        if "mixedRoPE_3d_learned_axial_mixing_weight" not in self.mixedRoPE3D_configs:
+            self.mixedRoPE3D_configs["mixedRoPE_3d_learned_axial_mixing_weight"] = False
 
     @classmethod
     def copyfrom(cls, source: "Self", **kwargs) -> "Self":

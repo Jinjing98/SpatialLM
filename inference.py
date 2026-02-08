@@ -2,9 +2,11 @@ import os
 import glob
 import json
 import argparse
+from pathlib import Path
 
 import torch
 import numpy as np
+import yaml
 from tqdm import tqdm
 from threading import Thread
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -18,6 +20,37 @@ DETECT_TYPE_PROMPT = {
     "arch": "Detect walls, doors, windows.",
     "object": "Detect boxes.",
 }
+
+
+def load_config_from_yaml(model_path, config_key):
+    """
+    JJ: Load configuration from config.yaml file in model directory.
+    
+    Args:
+        model_path: Path to the model directory
+        config_key: Key to look for in the yaml file (e.g., 'cca_configs', 'mixedRoPE3D_configs')
+    
+    Returns:
+        Config dict if found and non-empty, None otherwise
+    """
+    config_yaml_path = Path(model_path) / "config.yaml"
+    if not config_yaml_path.exists():
+        return None
+    
+    try:
+        with open(config_yaml_path, 'r') as f:
+            yaml_config = yaml.safe_load(f)
+        
+        if yaml_config and config_key in yaml_config:
+            config_value = yaml_config[config_key]
+            # Return None if config_value is None or empty dict
+            if config_value is None or (isinstance(config_value, dict) and len(config_value) == 0):
+                return None
+            return config_value
+        return None
+    except Exception as e:
+        print(f"[Inference] Warning: Failed to read config.yaml: {e}")
+        return None
 
 
 def preprocess_point_cloud(points, colors, grid_size, num_bins):
@@ -80,7 +113,7 @@ def generate_layout(
     prompt = f"<|point_start|><|point_pad|><|point_end|>{task_prompt} The reference code is as followed: {code_template}"
 
     # prepare the conversation data
-    if model.config.model_type in ["spatiallm_qwen", "cca_spatiallm_qwen"]:
+    if model.config.model_type in ["spatiallm_qwen", "cca_spatiallm_qwen", "mixedRoPE3D_spatiallm_qwen"]:
         conversation = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
@@ -288,7 +321,7 @@ if __name__ == "__main__":
         "--VLM_PE",
         type=str,
         default=None,
-        choices=[None, "CCA_2DProj", "MixedRoPE3D"],
+        choices=[None, "CCA_2DProj", "mixedRoPE3D"],
         help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection",
     )
     parser.add_argument(
@@ -324,6 +357,28 @@ if __name__ == "__main__":
         # Change config to CCA type
         config.model_type = "cca_spatiallm_qwen"
         
+        # JJ: Try to load CCA configs from config.yaml first, then from model config, finally use defaults
+        # First, try to read from config.yaml
+        cca_configs = load_config_from_yaml(args.model_path, 'cca_configs')
+        if cca_configs:
+            print(f"[Inference] Loaded cca_configs from config.yaml: {cca_configs}")
+            assert config.cca_configs == cca_configs, "cca_configs from model should equal to cca_configs from config.yaml"
+            config.cca_configs = cca_configs
+        else:
+            # Finally, use defaults and warn
+            config.cca_configs = {
+                'grid_size': 24,
+                'projection': 'top_down',
+                'pcd_norm_method': 'adaptiveNorm'
+            }
+            print(f"\n{'='*80}")
+            print(f"[WARNING] Could not find 'cca_configs' in config.yaml or model config.")
+            print(f"[WARNING] Using default cca_configs: {config.cca_configs}")
+            print(f"[WARNING] It is YOUR RESPONSIBILITY to verify that these PE hyperparameters")
+            print(f"[WARNING] are compatible with the model provided in model_path!")
+            print(f"[WARNING] Performance may be unexpected if the model was not trained with these settings!")
+            print(f"{'='*80}\n")
+        
         # Directly instantiate CCA model and load weights
         model = CCASpatialLMQwenForCausalLM.from_pretrained(
             args.model_path,
@@ -331,7 +386,48 @@ if __name__ == "__main__":
             torch_dtype=getattr(torch, args.inference_dtype),
             trust_remote_code=True
         )
-    elif args.VLM_PE == None:
+    elif args.VLM_PE == "mixedRoPE3D":
+        # Use mixedRoPE3D model
+        from spatiallm.model.spatiallm_qwen_mixedRoPE3d import MixedRoPE3DSpatialLMQwenForCausalLM
+        print(f"[Inference] Using mixedRoPE3D model with VLM_PE={args.VLM_PE}")
+        print(f"[Inference] Loading MixedRoPE3DSpatialLMQwenForCausalLM...")
+        
+        # Change config to mixedRoPE3D type
+        config.model_type = "mixedRoPE3D_spatiallm_qwen"
+        
+        # JJ: Try to load MixedRoPE3D configs from config.yaml first, then from model config, finally use defaults
+        # First, try to read from config.yaml
+        mixedRoPE3D_configs = load_config_from_yaml(args.model_path, 'mixedRoPE3D_configs')
+        if mixedRoPE3D_configs:
+            print(f"[Inference] Loaded mixedRoPE3D_configs from config.yaml: {mixedRoPE3D_configs}")
+            assert config.mixedRoPE3D_configs == mixedRoPE3D_configs, "mixedRoPE3D_configs from model should equal to mixedRoPE3D_configs from config.yaml"
+            config.mixedRoPE3D_configs = mixedRoPE3D_configs
+        else:
+            # Finally, use defaults and warn
+            config.mixedRoPE3D_configs = {
+                'rope_theta_3d': 10000.0,
+                'rope_mixed': True,
+                'norm_strategy': 'virtual_resolution',
+                'virtual_resolution': 1.0,
+                'rope_mixed_learn_per_axis': False,
+                'mixedRoPE_3d_learned_axial_mixing_weight': False
+            }
+            print(f"\n{'='*80}")
+            print(f"[WARNING] Could not find 'mixedRoPE3D_configs' in config.yaml or model config.")
+            print(f"[WARNING] Using default mixedRoPE3D_configs: {config.mixedRoPE3D_configs}")
+            print(f"[WARNING] It is YOUR RESPONSIBILITY to verify that these PE hyperparameters")
+            print(f"[WARNING] are compatible with the model provided in model_path!")
+            print(f"[WARNING] Performance may be unexpected if the model was not trained with these settings!")
+            print(f"{'='*80}\n")
+        
+        # Directly instantiate mixedRoPE3D model and load weights
+        model = MixedRoPE3DSpatialLMQwenForCausalLM.from_pretrained(
+            args.model_path,
+            config=config,
+            torch_dtype=getattr(torch, args.inference_dtype),
+            trust_remote_code=True
+        )
+    else:
         # Use default model
         assert original_model_type in ["spatiallm_qwen"]
         print(f"[Inference] Using default model with model_type={original_model_type}")
@@ -341,22 +437,6 @@ if __name__ == "__main__":
             torch_dtype=getattr(torch, args.inference_dtype),
             trust_remote_code=True
         )
-    elif args.VLM_PE == "MixedRoPE3D":
-        # Use MixedRoPE3D model
-        from spatiallm.model.spatiallm_qwen_mixedRoPE3d import MixedRoPE3DSpatialLMQwenForCausalLM
-        print(f"[Inference] Using MixedRoPE3D model with VLM_PE={args.VLM_PE}")
-        print(f"[Inference] Loading MixedRoPE3DSpatialLMQwenForCausalLM...")
-        
-        # Change config to MixedRoPE3D type
-        config.model_type = "mixedRoPE3d_spatiallm_qwen"
-        model = MixedRoPE3DSpatialLMQwenForCausalLM.from_pretrained(
-            args.model_path,
-            config=config,
-            torch_dtype=getattr(torch, args.inference_dtype),
-            trust_remote_code=True
-        )
-    else:
-        raise ValueError(f"Invalid VLM_PE: {args.VLM_PE}")
     
     print(f"[Inference] Loaded model class: {model.__class__.__name__}")
     
