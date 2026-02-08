@@ -115,6 +115,11 @@ def compute_mixed_cis_3d(
     Returns:
         freqs_cis: [num_heads, N, dim//2] complex tensor
     """
+    # JJ: Debug - Check inputs for NaN at the very beginning
+
+    print('[Guard DEBUG FREQ 00]',freqs[0][0])
+    assert not torch.isnan(freqs).any(), f"NaN in freqs  {freqs} input to compute_mixed_cis_3d!"
+
     N = t_x.shape[0]
     # No float 16 for this range
     with torch.cuda.amp.autocast(enabled=False):
@@ -126,6 +131,11 @@ def compute_mixed_cis_3d(
         print('freqs_x shape: ', freqs_x.shape)
         print('freqs_y shape: ', freqs_y.shape)
         print('freqs_z shape: ', freqs_z.shape)
+        
+        # JJ: Debug - check after matrix multiplication
+        assert not torch.isnan(freqs_x).any(), "NaN in freqs_x after matmul!"
+        assert not torch.isnan(freqs_y).any(), "NaN in freqs_y after matmul!"
+        assert not torch.isnan(freqs_z).any(), "NaN in freqs_z after matmul!"
         
         # JJ: Apply learnable axial mixing weights if provided
         if axial_weights is not None:
@@ -145,12 +155,19 @@ def compute_mixed_cis_3d(
             freqs_combined = w_x * freqs_x + w_y * freqs_y + w_z * freqs_z
         else:
             print('Using fixed 1:1:1 axial mixing')
+            # JJ: Debug - check before addition
+            print(f"  freqs_x range: [{freqs_x.min().item():.4f}, {freqs_x.max().item():.4f}], has NaN: {torch.isnan(freqs_x).any()}, has inf: {torch.isinf(freqs_x).any()}")
+            print(f"  freqs_y range: [{freqs_y.min().item():.4f}, {freqs_y.max().item():.4f}], has NaN: {torch.isnan(freqs_y).any()}, has inf: {torch.isinf(freqs_y).any()}")
+            print(f"  freqs_z range: [{freqs_z.min().item():.4f}, {freqs_z.max().item():.4f}], has NaN: {torch.isnan(freqs_z).any()}, has inf: {torch.isinf(freqs_z).any()}")
             freqs_combined = freqs_x + freqs_y + freqs_z
-        
+            print(f"  freqs_combined range: [{freqs_combined[~torch.isnan(freqs_combined)].min().item() if (~torch.isnan(freqs_combined)).any() else 'all NaN'}, {freqs_combined[~torch.isnan(freqs_combined)].max().item() if (~torch.isnan(freqs_combined)).any() else 'all NaN'}], has NaN: {torch.isnan(freqs_combined).any()}")
         # JJ: KEY OPERATION - Weighted addition combines 3D spatial information
         # Each point's encoding = weighted sum of x/y/z contributions (per freq bin)
         freqs_cis = torch.polar(torch.ones_like(freqs_combined), freqs_combined)
-        print('freqs_cis shape: ', freqs_cis.shape)
+        
+        # JJ: Debug - check for NaN (only on first occurrence)
+        assert not torch.isnan(freqs_cis).any(), f'NaN in freqs_cis! freqs_combined'
+
     return freqs_cis
 
 # JJ: 3D version for point clouds
@@ -174,26 +191,28 @@ def compute_axial_cis_3d(
             Uses same frequency bins for x/y/z, combined via addition
     """
     # JJ: Standard RoPE frequency: θ^(-2i/d) shared across all axes
-    num_freqs = (dim // 3) // 2
-    freq_indices = torch.arange(num_freqs, dtype=torch.float32)
-    freqs_base = 1.0 / (theta ** (freq_indices / ((dim // 3) // 2)))
+    num_freqs_lower = (dim // 3) // 2
+    num_freqs_x = num_freqs_y = num_freqs_z = num_freqs_lower
+    
+    left_num_freq = (dim - (num_freqs_x+num_freqs_y+num_freqs_z)*2) // 2
+    num_freqs_z += left_num_freq
+    print(f'[MixedRoPE3D] axial cis 3d: num_freqs_x: {num_freqs_x}, num_freqs_y: {num_freqs_y}, num_freqs_z: {num_freqs_z}')
+
+    freq_indices_x = torch.arange(num_freqs_x, dtype=torch.float32).to(t_x.device)
+    freq_indices_y = torch.arange(num_freqs_y, dtype=torch.float32).to(t_y.device)
+    freq_indices_z = torch.arange(num_freqs_z, dtype=torch.float32).to(t_z.device)
+    freqs_base_x = 1.0 / (theta ** (freq_indices_x / ((dim // 3) // 2)))
+    freqs_base_y = 1.0 / (theta ** (freq_indices_y / ((dim // 3) // 2)))
+    freqs_base_z = 1.0 / (theta ** (freq_indices_z / ((dim // 3) // 2)))
     
     # Compute for each dimension with the same frequency basis
-    freqs_x = torch.outer(t_x, freqs_base)
-    freqs_y = torch.outer(t_y, freqs_base)
-    freqs_z = torch.outer(t_z, freqs_base)
-    print('axial cis 3d: ')
-    print('freqs_x shape: ', freqs_x.shape)
-    print('freqs_y shape: ', freqs_y.shape)
-    print('freqs_z shape: ', freqs_z.shape)
+    freqs_x = torch.outer(t_x, freqs_base_x)
+    freqs_y = torch.outer(t_y, freqs_base_y)
+    freqs_z = torch.outer(t_z, freqs_base_z)
 
     freqs_cis_x = torch.polar(torch.ones_like(freqs_x), freqs_x)
     freqs_cis_y = torch.polar(torch.ones_like(freqs_y), freqs_y)
     freqs_cis_z = torch.polar(torch.ones_like(freqs_z), freqs_z)
-    print('freqs_cis_x shape: ', freqs_cis_x.shape)
-    print('freqs_cis_y shape: ', freqs_cis_y.shape)
-    print('freqs_cis_z shape: ', freqs_cis_z.shape)
-    print('freqs_cis shape: ', torch.cat([freqs_cis_x, freqs_cis_y, freqs_cis_z], dim=-1).shape)
     return torch.cat([freqs_cis_x, freqs_cis_y, freqs_cis_z], dim=-1)
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
@@ -236,11 +255,12 @@ def apply_rotary_emb(xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
     print('freqs_cis before broadcast: ', freqs_cis.shape)
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-    print('xq shape: ', xq.shape)
-    print('xq_ shape: ', xq_.shape)
+    # Check for NaN before multiplication
+    assert not torch.isnan(freqs_cis).any(), "NaN in freqs_cis before RoPE!"
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    print('freqs_cis shape: ', freqs_cis.shape)
-    print('xq_out shape: ', xq_out.shape)
+    # Check for NaN after multiplication
+    assert not torch.isinf(freqs_cis).any(), "Inf in freqs_cis after RoPE!"
+    
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq).to(xq.device), xk_out.type_as(xk).to(xk.device)
 
@@ -402,6 +422,7 @@ class RoPEAttention_3D(Attention):
                 print('freqs shape: ', self.freqs.shape)
                 freqs_shared = self.freqs.repeat(3, 1)  # [1, D] -> [3, D]
                 print('freqs_shared shape: ', freqs_shared.shape)
+                # freqs_shared = torch.ones_like(freqs_shared) # JJ HACK. Check if freqs gets insance here.
                 freqs_cis = self.compute_cis(freqs_shared, t_x, t_y, t_z, axial_weights=self.axial_weights)
             print('freqs_cis shape: ', freqs_cis.shape)
         else:

@@ -1,32 +1,44 @@
 #!/bin/bash
 
-#SBATCH --job-name=end_pose
-#SBATCH --gpus=v100:1   # rtxa5000 p6000 rtx6000 a100 v100 # monst3r requires 48GB each, only a100 supports
-#SBATCH --nodes=1  # several gpus on one node
-#SBATCH --ntasks-per-node=1 #used for multi gpu training
-#SBATCH --mem=48G #64G #35G#25G  # 20G may cause bus error?   # mem * num_GPUS
-#SBATCH --time=46:00:00
-#SBATCH --cpus-per-task=4 #8 #4   #num works4 can not be too big;
-#SBATCH --mail-user=xu.jinjing@uniklinikum-dresden.de
+#SBATCH --nodes=1
+#SBATCH --ntasks=1 #2
+#SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
+#SBATCH --gpus-per-task=1
+#SBATCH --time=20:00:00
+#SBATCH --mem=80G
+#SBATCH --partition=capella
+#SBATCH --mail-user=xvjinjing8@gmail.com
 #SBATCH --mail-type=BEGIN,END,FAIL,REQUEUE,TIME_LIMIT_90
-#SBATCH --error=/mnt/nct-zfs/TCO-Test/jinjingxu/slurm_out/%j.err
-#SBATCH --output=/mnt/nct-zfs/TCO-Test/jinjingxu/slurm_out/%j.out
+#SBATCH --error=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.err
+#SBATCH --output=/data/horse/ws/jixu233b-metadata_ws/hpc_out/%j.out
 
 
-DATA_ROOT='/data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm/'
-
-export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=29500
-export NNODES=1
-export NODE_RANK=0
-export NPROC_PER_NODE=4  # Adjust to the number of GPUs available
+# source /software/rapids/r24.10/Anaconda3/2024.02-1/etc/profile.d/conda.sh
+# conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatiallm
+# module load CUDA/12.4.0
+# cd $SLURM_SUBMIT_DIR
 
 
-DATA_ROOT='/data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm/'
-DATA_ROOT='/mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm/'
+# export MASTER_ADDR=127.0.0.1
+# export MASTER_PORT=29500
+# export NNODES=1
+# export NODE_RANK=0
+# export NPROC_PER_NODE=1  # Adjust to the number of GPUs available
 
-# suggest not to disble, as sonata was trained with enable. Performance will slightly diff.
-# Note: output_dir will automatically have timestamp appended (e.g., saves_0126_153045)
-# To disable: AUTO_TIMESTAMP_OUTPUT_DIR=0 python train.py ...
+
+
+
+# Experiment name (optional)
+# Usage: EXPNAME="test" bash train.sh
+# - If not set: output_dir will be {base_dir}/MMDDHHMM
+# - If set: output_dir will be {base_dir}/{EXPNAME}_MMDDHHMM
+EXPNAME=${EXPNAME:-""}
+#EXPNAME=${EXPNAME:-"spatiallm_cca_24_adaptedNorm"}
+# EXPNAME=${EXPNAME:-"spatiallm_cca_48_adaptedNorm"}
+# EXPNAME=${EXPNAME:-"spatiallm_cca_24_gridsizeNorm"}
+# EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp6_075_no_drift_leanredMixWeights"}
+
 SPATIALLM_VERBOSE=0 python train.py \
-configs/spatiallm_sft.yaml
+    configs/spatiallm_sft_mixedrope3d.yaml \
+#    configs/spatiallm_sft.yaml \
+    # expname="$EXPNAME"
