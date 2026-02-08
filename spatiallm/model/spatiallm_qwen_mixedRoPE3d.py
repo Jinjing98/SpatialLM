@@ -107,19 +107,48 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
         self.post_init()
 
     def forward_point_cloud(self, point_cloud, device, dtype):
+        # JJ: Return both embeddings and grid coordinates for MixedRoPE3D
+        # Grid coordinates: each token corresponds to a voxel grid cell
         # point cloud has shape (n_points, n_features)
-        # find the points that have nan values
+        
+        # Find and remove NaN values
         self.point_backbone.to(torch.float32)
         nan_mask = torch.isnan(point_cloud).any(dim=1)
         point_cloud = point_cloud[~nan_mask]
         coords = point_cloud[:, :3].int()
         feats = point_cloud[:, 3:].float()
+        
         if self.point_backbone_type == PointBackboneType.SCENESCRIPT:
             pc_sparse_tensor = torchsparse.SparseTensor(coords=coords, feats=feats)
             pc_sparse_tensor = sparse_collate([pc_sparse_tensor])  # batch_size = 1
             pc_sparse_tensor = pc_sparse_tensor.to(device)
-            encoded_features = self.point_backbone(pc_sparse_tensor)
-            return self.point_proj(encoded_features["context"].to(dtype))
+            encoded_output = self.point_backbone(pc_sparse_tensor)
+            
+            # JJ: SceneScript returns dict with "context" (embeddings) and "coords" (grid coordinates)
+            # The forward() method calls vox_to_sequence() which returns:
+            # - "seq": [B, maxlen, C] features
+            # - "coords": [B, maxlen, 3] grid coordinates
+            # - "mask": [B, maxlen] mask
+            # But the return is processed as {"context": context, "context_mask": mask}
+            
+            # Extract context (embeddings)
+            context = encoded_output["context"]  # [B, N_tokens, C]
+            point_embeds = self.point_proj(context.to(dtype))
+            
+            # JJ: Extract grid coordinates from the sparse tensor BEFORE vox_to_sequence
+            # We need to process the raw sparse output to get coords
+            # SceneScript uses ResNet3DSparse which outputs torchsparse.SparseTensor
+            # Re-run the encoder to get the sparse tensor output
+            sparse_output = self.point_backbone.sparse_resnet(pc_sparse_tensor)
+            
+            # Extract coordinates from sparse tensor: .C is [N, 4] with [batch_idx, x, y, z]
+            from spatiallm.model.scenescript_encoder import sparse_uncollate
+            sparse_list = sparse_uncollate(sparse_output)
+            grid_coords = sparse_list[0].C.float()  # [N_tokens, 3] - already dropped batch idx in sparse_uncollate
+            
+            
+            return point_embeds, grid_coords.to(device)
+            
         elif self.point_backbone_type == PointBackboneType.SONATA:
             input_dict = {
                 "coord": feats[:, :3].to(device),
@@ -128,9 +157,37 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                 "batch": torch.zeros(coords.shape[0], dtype=torch.long).to(device),
             }
             encoded_features = self.point_backbone(input_dict)
-            # add the batch dimension
+            # Sonata returns context tensor [N_tokens, C]
+            
+            # JJ: To get grid_coord, we need to access the internal Point structure
+            # Sonata forward returns context directly, but we need coords
+            # Let's use return_coords=True if available
+            if hasattr(self.point_backbone, 'forward') and 'return_coords' in self.point_backbone.forward.__code__.co_varnames:
+                encoded_features, grid_coords_normalized = self.point_backbone(input_dict, return_coords=True)
+                # grid_coords_normalized is normalized [0, 1], we need to denormalize
+                # Use reduced_grid_size from encoder
+                grid_coords = grid_coords_normalized * (self.point_backbone.reduced_grid_size - 1)
+            else:
+                # Fallback: re-run to get the point structure
+                # This is less efficient but works
+                from spatiallm.model.sonata_encoder import Point
+                point = Point(input_dict)
+                point = self.point_backbone.embedding(point)
+                point.serialization(order=self.point_backbone.order, shuffle_orders=self.point_backbone.shuffle_orders)
+                point.sparsify()
+                point = self.point_backbone.enc(point)
+                
+                # Extract grid coordinates
+                grid_coords = point["grid_coord"].float()  # [N_tokens, 3]
+                
+                # Use the already computed features
+                encoded_features = self.point_backbone(input_dict)
+            
+            # Add the batch dimension
             encoded_features = encoded_features.unsqueeze(0)
-            return self.point_proj(encoded_features.to(dtype))
+            point_embeds = self.point_proj(encoded_features.to(dtype))
+            
+            return point_embeds, grid_coords.to(device)
         else:
             raise ValueError(f"Unknown point backbone type: {self.point_backbone_type}")
 
@@ -249,25 +306,34 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
         if inputs_embeds is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
 
+        # JJ: Track point coordinates and masks for MixedRoPE3D
+        point_coords_list = []
+        point_token_mask = None
+        
+        # JJ: Optimization - only process point_clouds during prefill stage
+        # Generation stage (input_ids.shape[1] == 1) should not process raw point clouds
+        is_generation_stage = (input_ids is not None and input_ids.shape[1] == 1 and not self.training)
+        
         if (
             self.point_backbone is not None
-            and (input_ids.shape[1] != 1 or self.training)
+            and not is_generation_stage  # Skip point cloud processing in generation
             and point_clouds is not None
         ):
-            print(f'[DftPE] This is the prefill stage with input_ids shape: {input_ids.shape}')
             n_point_clouds = point_clouds.shape[0]
             point_features = []
             for i in range(n_point_clouds):  # * iterate over batch
                 point_cloud = point_clouds[i]
-                point_feature = self.forward_point_cloud(
+                point_feature, point_coords_raw = self.forward_point_cloud(
                     point_cloud, inputs_embeds.device, inputs_embeds.dtype
                 )
                 point_features.append(point_feature)
+                point_coords_list.append(point_coords_raw)
 
             # Insert point cloud features into the input ids
             point_start_end_token_pos = []
             new_input_embeds = []
             new_attention_mask = []
+            new_point_token_masks = []  # JJ: Track which tokens are point tokens
             cur_point_idx = 0
             max_num_tokens = 0
             for cur_input_ids, cur_input_embeds, cur_attention_mask in zip(
@@ -279,7 +345,6 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                     .squeeze(0)
                 )
                 num_patches = cur_point_features.shape[0]  # * number of point tokens
-                print('[DftPE] point_features num_patches: ', num_patches)
                 num_point_start_tokens = (
                     (cur_input_ids == self.config.point_start_token_id).sum().item()
                 )
@@ -291,15 +356,12 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                     "The number of point start tokens and point end tokens should be 1, "
                     f"but got {num_point_start_tokens} and {num_point_end_tokens}."
                 )
-                print('[DftPE] cur_input_ids: ',cur_input_ids.shape)
                 point_start_token_pos = torch.where(
                     cur_input_ids == self.config.point_start_token_id
                 )[0][0]
                 point_end_token_pos = torch.where(
                     cur_input_ids == self.config.point_end_token_id
                 )[0][0]
-                print('[DftPE] point_start_token_id/point_end_token_id: ', self.config.point_start_token_id, self.config.point_end_token_id)
-                print('[DftPE] point_start_token_pos: ', point_start_token_pos, 'point_end_token_pos: ', point_end_token_pos)
                 cur_new_input_embeds = torch.cat(
                     (
                         cur_input_embeds[: point_start_token_pos + 1],
@@ -316,18 +378,20 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                     ),
                     dim=0,
                 )
-                print('[DftPE] cur_new_input_embeds: ', cur_new_input_embeds.shape)
-                print('[DftPE] cur_new_attention_mask: ', cur_new_attention_mask.shape)
+                
+                # JJ: Create point token mask
+                cur_point_token_mask = torch.zeros(cur_new_input_embeds.shape[0], dtype=torch.bool, device=cur_input_embeds.device)
+                cur_point_token_mask[point_start_token_pos + 1 : point_start_token_pos + 1 + num_patches] = True
 
                 cur_point_idx += 1
                 new_input_embeds.append(cur_new_input_embeds)
                 new_attention_mask.append(cur_new_attention_mask)
+                new_point_token_masks.append(cur_point_token_mask)
                 point_start_end_token_pos.append(
                     (point_start_token_pos, num_patches, point_end_token_pos)
                 )
                 if cur_new_input_embeds.shape[0] > max_num_tokens:
                     max_num_tokens = cur_new_input_embeds.shape[0]
-            print(f'[DftPE] max_num_tokens in the batch with b_size{n_point_clouds}: ', max_num_tokens)
             
             # pad the new input embeds and attention mask to the max dimension
             for i in range(len(new_input_embeds)):
@@ -342,15 +406,52 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                     (0, max_num_tokens - cur_attention_mask.shape[0]),
                     value=0,
                 )
+                
+                # JJ: Pad point token mask
+                cur_point_token_mask = new_point_token_masks[i]
+                new_point_token_masks[i] = F.pad(
+                    cur_point_token_mask,
+                    (0, max_num_tokens - cur_point_token_mask.shape[0]),
+                    value=False,
+                )
+            
             inputs_embeds = torch.stack(new_input_embeds, dim=0)
             attention_mask = torch.stack(new_attention_mask, dim=0)
+            point_token_mask = torch.stack(new_point_token_masks, dim=0)  # [B, max_seq_len]
+            
+            # JJ: Use the first batch's point coordinates (assuming same scene structure)
+            if len(point_coords_list) > 0:
+                point_coords_list = point_coords_list[0]  # [N_point, 3]
+            else:
+                point_coords_list = None
 
             assert (
                 attention_mask.shape[1] == inputs_embeds.shape[1]
             ), "The length of attention mask and inputs embeds should be the same"
+        elif is_generation_stage:
+            # Generation stage: skip point cloud processing
+            pass
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         assert position_ids is None, f'position_ids is None for dft. we make it explicit in _debug_position_ids_gen'
+        
+        # JJ: Determine if this is prefill or generation stage
+        # Prefill: input_ids contains full prompt (shape [B, L] with L > 1)
+        # Generation: input_ids contains only 1 new token (shape [B, 1])
+        # Better heuristic than checking past_key_values, as transformers may initialize cache before first forward
+        is_prefill_stage = (input_ids is not None and input_ids.shape[1] > 1) or (past_key_values is None)
+        
+        # JJ: Pass point_coords and point_token_mask only during prefill
+        # During generation, we don't apply 3D RoPE to new text tokens
+        if is_prefill_stage:
+            # Prefill stage: apply 3D RoPE to point tokens
+            model_point_coords = point_coords_list if 'point_coords_list' in locals() else None
+            model_point_token_mask = point_token_mask if 'point_token_mask' in locals() else None
+        else:
+            # Generation stage: only standard 1D RoPE for new text tokens
+            model_point_coords = None
+            model_point_token_mask = None
+        
         outputs = self.model(
             input_ids=None,
             attention_mask=attention_mask,# only have dim of text_token_dim+accu_next_text_token_dim 1 during net token gen.. The attn for pcd does not saved here during net token gen.
@@ -363,6 +464,8 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=None,  # Set to None to let position_ids take full control
+            point_coords=model_point_coords,
+            point_token_mask=model_point_token_mask,
         )
 
         hidden_states = outputs[0]
