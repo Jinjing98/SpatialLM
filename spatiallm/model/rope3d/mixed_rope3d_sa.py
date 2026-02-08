@@ -325,6 +325,7 @@ class RoPEAttention_3D(Attention):
                 freqs = freqs + torch.randn_like(freqs) * 0.01
                 freqs = freqs.view(3, -1)  # [3, num_heads * (dim//2)]
                 print(f'Learned param freqs shape (per-axis) given head_num{self.num_heads}, head_dim{self.dim // self.num_heads}: ', freqs.shape)
+                # JJ TODO: manage the lr seperately?
                 self.freqs = nn.Parameter(freqs, requires_grad=True)
             else:
                 # JJ: Shared frequencies across x/y/z axes
