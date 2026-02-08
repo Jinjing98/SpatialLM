@@ -364,12 +364,30 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
         if position_embeddings is None:
             raise ValueError("position_embeddings cannot be None when applying mixed RoPE")
         
-        # Clone to avoid in-place modifications
-        query_states_new = query_states.clone()
-        key_states_new = key_states.clone()
+        # JJ: Memory optimization - use empty_like + selective copy instead of full clone
+        # This avoids initializing memory we'll overwrite anyway
+        query_states_new = torch.empty_like(query_states)
+        key_states_new = torch.empty_like(key_states)
         
         # Extract point cloud coordinates for the current tokens
         point_indices = point_token_mask[0].nonzero(as_tuple=True)[0]  # [N_point]
+        
+        # JJ: Compute text indices early (needed for selective copy)
+        text_mask = ~point_token_mask[0]
+        text_indices = text_mask.nonzero(as_tuple=True)[0]  # [N_text]
+        
+        # JJ: Selective copy strategy depends on spatial_dim:
+        # - If spatial_dim > 0: Copy text tokens early (point tokens processed separately)
+        # - If spatial_dim == 0: Copy all tokens (unified 1D RoPE processing)
+        if self.spatial_dim > 0 and len(text_indices) > 0:
+            # Copy text tokens from original states (no RoPE applied yet, will apply in Step 3)
+            query_states_new[:, :, text_indices, :] = query_states[:, :, text_indices, :]
+            key_states_new[:, :, text_indices, :] = key_states[:, :, text_indices, :]
+        elif self.spatial_dim == 0:
+            # spatial_dim=0: No 3D RoPE, all tokens use 1D RoPE
+            # Copy all tokens first (will apply 1D RoPE to all in Step 3)
+            query_states_new.copy_(query_states)
+            key_states_new.copy_(key_states)
         
         if len(point_indices) > 0 and self.spatial_dim > 0:
             # ========== Step 1: Apply 3D RoPE to SPATIAL dimensions of point tokens ==========
@@ -542,17 +560,20 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
             key_states_new[:, :, point_indices, :] = k_point_final
         
         # ========== Step 3: Apply 1D RoPE to ALL dimensions of text tokens ==========
-        # JJ: If spatial_dim=0, apply 1D RoPE to ALL tokens (including point tokens)
+        # JJ: Memory optimization note - text tokens were copied from original query_states earlier
+        # Now we extract them from query_states_new (which contains the copied values) and apply RoPE in-place
+        # 
+        # If spatial_dim=0, apply 1D RoPE to ALL tokens (including point tokens)
         # Otherwise, only apply to text tokens (point tokens already handled above)
         if self.spatial_dim == 0:
             remaining_indices = torch.arange(seq_len, device=query_states.device)
         else:
-            text_mask = ~point_token_mask[0]
-            remaining_indices = text_mask.nonzero(as_tuple=True)[0]
+            # Use the same text_indices we computed earlier
+            remaining_indices = text_indices
         
         if len(remaining_indices) > 0:
             cos, sin = position_embeddings
-            # Extract remaining tokens (text tokens, or all tokens if spatial_dim=0)
+            # Extract text tokens (already copied from original query_states in the early copy step)
             q_remaining = query_states_new[:, :, remaining_indices, :].contiguous()  # [B, num_heads, N_remaining, head_dim]
             k_remaining = key_states_new[:, :, remaining_indices, :].contiguous()   # [B, num_key_value_heads, N_remaining, head_dim]
             

@@ -34,7 +34,7 @@ template: spatiallm_qwen # spatiallm_qwen, spatiallm_llama
 num_bins: 1280
 do_augmentation: false
 random_rotation: true
-cutoff_len: 8192
+cutoff_len: 4096 #8192 # JJ HACK for mixedRoPE3D_0.75_interleved 4339 will Cause OOM on H100 90GB, 3844 works. We set 4096
 overwrite_cache: true
 preprocessing_num_workers: 8
 dataloader_num_workers: 8
@@ -46,7 +46,7 @@ save_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/saves/arkitscenes # sav
 output_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/spatiallm
 logging_steps: 10
 save_steps: 500
-overwrite_output_dir: false
+overwrite_output_dir: true # JJ HACK, to avoid resuming the wrong ckpts
 save_total_limit: 5
 
 ### train

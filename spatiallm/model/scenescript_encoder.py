@@ -267,15 +267,20 @@ class PointCloudEncoder(nn.Module):
         # the following is a legacy parameter
         self.extra_embedding = nn.Parameter(torch.empty(d_model).normal_(std=0.02))
 
-    def forward(self, point_cloud: torchsparse.SparseTensor):
+    def forward(self, point_cloud: torchsparse.SparseTensor, return_coords: bool = False):
         """Forward function.
 
         Args:
             point_cloud: torchsparse.SparseTensor.
+            return_coords: bool. If True, also return grid coordinates for MixedRoPE3D.
 
-        Returns: a Dict with the following keys:
-            context: [B, maxlen, d_model] torch.FloatTensor.
-            context_mask: [B, maxlen] torch.BoolTensor. True means ignore.
+        Returns: 
+            If return_coords is False: a Dict with the following keys:
+                context: [B, maxlen, d_model] torch.FloatTensor.
+                context_mask: [B, maxlen] torch.BoolTensor. True means ignore.
+            If return_coords is True: tuple of (context_dict, grid_coords)
+                context_dict: same as above
+                grid_coords: [B, maxlen, 3] torch.FloatTensor. Normalized grid coordinates.
         """
         outputs = self.sparse_resnet(point_cloud)
         outputs = vox_to_sequence(outputs)
@@ -293,7 +298,14 @@ class PointCloudEncoder(nn.Module):
         # legacy parameter
         context = context + repeat(self.extra_embedding, "d -> 1 1 d")
 
-        return {
+        result_dict = {
             "context": context,
             "context_mask": context_mask,
         }
+        
+        if return_coords:
+            # Return normalized coordinates for MixedRoPE3D
+            # coords is [B, maxlen, 3] with integer grid coordinates
+            return result_dict, coords.float()
+        else:
+            return result_dict

@@ -147,30 +147,16 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
             pc_sparse_tensor = torchsparse.SparseTensor(coords=coords, feats=feats)
             pc_sparse_tensor = sparse_collate([pc_sparse_tensor])  # batch_size = 1
             pc_sparse_tensor = pc_sparse_tensor.to(device)
-            encoded_output = self.point_backbone(pc_sparse_tensor)
             
-            # JJ: SceneScript returns dict with "context" (embeddings) and "coords" (grid coordinates)
-            # The forward() method calls vox_to_sequence() which returns:
-            # - "seq": [B, maxlen, C] features
-            # - "coords": [B, maxlen, 3] grid coordinates
-            # - "mask": [B, maxlen] mask
-            # But the return is processed as {"context": context, "context_mask": mask}
+            # JJ: Memory optimization - use return_coords=True to get both embeddings and coords in one pass
+            # This avoids running the encoder twice (once for embeddings, once for coords)
+            encoded_output, grid_coords = self.point_backbone(pc_sparse_tensor, return_coords=True)
             
             # Extract context (embeddings)
             context = encoded_output["context"]  # [B, N_tokens, C]
             point_embeds = self.point_proj(context.to(dtype))
             
-            # JJ: Extract grid coordinates from the sparse tensor BEFORE vox_to_sequence
-            # We need to process the raw sparse output to get coords
-            # SceneScript uses ResNet3DSparse which outputs torchsparse.SparseTensor
-            # Re-run the encoder to get the sparse tensor output
-            sparse_output = self.point_backbone.sparse_resnet(pc_sparse_tensor)
-            
-            # Extract coordinates from sparse tensor: .C is [N, 4] with [batch_idx, x, y, z]
-            from spatiallm.model.scenescript_encoder import sparse_uncollate
-            sparse_list = sparse_uncollate(sparse_output)
-            grid_coords = sparse_list[0].C.float()  # [N_tokens, 3] - already dropped batch idx in sparse_uncollate
-            
+            grid_coords = grid_coords[0].float()  # [N_tokens, 3]
             
             return point_embeds, grid_coords.to(device)
             
@@ -181,12 +167,7 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                 "feat": feats.to(device),
                 "batch": torch.zeros(coords.shape[0], dtype=torch.long).to(device),
             }
-            encoded_features = self.point_backbone(input_dict)
-            # Sonata returns context tensor [N_tokens, C]
             
-            # JJ: To get grid_coord, we need to access the internal Point structure
-            # Sonata forward returns context directly, but we need coords
-            # Let's use return_coords=True if available
             if hasattr(self.point_backbone, 'forward') and 'return_coords' in self.point_backbone.forward.__code__.co_varnames:
                 encoded_features, grid_coords_normalized = self.point_backbone(input_dict, return_coords=True)
                 # JJ: grid_coords_normalized is already [0, 1], keep it that way!
@@ -196,21 +177,11 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                 grid_coords = grid_coords_normalized * virtual_res
                 print(f"[DEBUG] grid_coords range after scaling: [{grid_coords.min().item():.2f}, {grid_coords.max().item():.2f}], virtual_res={virtual_res}")
             else:
-                assert 0, 'disabled...'
-                # Fallback: re-run to get the point structure
-                # This is less efficient but works
-                from spatiallm.model.sonata_encoder import Point
-                point = Point(input_dict)
-                point = self.point_backbone.embedding(point)
-                point.serialization(order=self.point_backbone.order, shuffle_orders=self.point_backbone.shuffle_orders)
-                point.sparsify()
-                point = self.point_backbone.enc(point)
-                
-                # Extract grid coordinates
-                grid_coords = point["grid_coord"].float()  # [N_tokens, 3]
-                
-                # Use the already computed features
-                encoded_features = self.point_backbone(input_dict)
+                # Fallback: this path should be disabled now
+                raise NotImplementedError(
+                    "Sonata encoder must support return_coords=True parameter. "
+                    "Please update spatiallm/model/sonata_encoder.py to add this feature."
+                )
             
             # Add the batch dimension
             encoded_features = encoded_features.unsqueeze(0)

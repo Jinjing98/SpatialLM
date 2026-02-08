@@ -8,11 +8,11 @@ trust_remote_code: true
 VLM_PE: "mixedRoPE3D"         # Options: null (comment out; default 1D RoPE), "CCA_2DProj", "3D_RoPE", "3D_Sinusoidal"
 mixedRoPE3D_configs:
   rope_theta_3d: 10000.0  # Base frequency for 3D RoPE (point cloud tokens)
-  rope_mixed: True  # Enable mixed RoPE: 3D RoPE for spatial dims, 1D RoPE for temporal dims
+  rope_mixed: False  # Enable mixed RoPE: 3D RoPE for spatial dims, 1D RoPE for temporal dims
   norm_strategy: "virtual_resolution"  # Point coordinate normalization strategy
   virtual_resolution: 1.0  # Virtual resolution scaling factor for normalization
   rope_mixed_learn_per_axis: False  # Learn separate frequencies per axis (x/y/z) vs shared across axes
-  mixedRoPE_3d_learned_axial_mixing_weight: False  # Learn axial mixing weights for 3D RoPE frequencies
+  mixedRoPE_3d_learned_axial_mixing_weight: True  # Learn axial mixing weights for 3D RoPE frequencies
   spatial_temporal_separate_strategy: "half_spatial_half_temp"  # Strategy: split head dims into spatial (3D) and temporal (1D) parts
   spatial_ratio: 0.75  # Ratio of head dimensions for 3D RoPE (spatial), remaining for 1D RoPE (temporal)
   mixed_rope_spatial_temporal_interleaved: False  # Interleave spatial/temporal dims vs contiguous blocks [spatial|temporal]
@@ -47,7 +47,6 @@ output_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/spatiallm
 logging_steps: 10
 save_steps: 500
 overwrite_output_dir: true # JJ HACK, to avoid resuming the wrong ckpts
-
 save_total_limit: 5
 
 ### train

@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1 #2
 #SBATCH --gres=gpu:1           # use 1 GPU per node (i.e. use one GPU per task)
 #SBATCH --gpus-per-task=1
-#SBATCH --time=20:00:00
+#SBATCH --time=30:00:00
 #SBATCH --mem=80G
 #SBATCH --partition=capella
 #SBATCH --mail-user=xvjinjing8@gmail.com
@@ -36,8 +36,10 @@ export NPROC_PER_NODE=1  # Adjust to the number of GPUs available
 #EXPNAME=${EXPNAME:-"spatiallm_cca_24_adaptedNorm"}
 # EXPNAME=${EXPNAME:-"spatiallm_cca_48_adaptedNorm"}
 # EXPNAME=${EXPNAME:-"spatiallm_cca_24_gridsizeNorm"}
-EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp6_075_no_drift_leanredMixWeights"}
+# EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp5_075_no_drift_theta100_trncutoff4096"}
+EXPNAME=${EXPNAME:-"spatiallm_axialrope3d_exp7_075_SpatialThenTime_trncutoff4096"}
 
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 SPATIALLM_VERBOSE=0 python train.py \
-    configs/spatiallm_sft_mixedrope3d_exp6.yaml \
+    configs/spatiallm_sft_axialrope3d_exp7.yaml \
     expname="$EXPNAME"
