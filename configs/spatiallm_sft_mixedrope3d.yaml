@@ -1,0 +1,71 @@
+### model
+model_name_or_path: manycore-research/SpatialLM1.1-Qwen-0.5B
+trust_remote_code: true
+
+### 3D Positional Encoding Configuration (uncomment to enable)
+# pcd_theta: 10000             # Base frequency for 3D PE (default: 10000)
+# disable_flash_attn: false    # Whether to disable flash attention (default: false)
+VLM_PE: "mixedRoPE3D"         # Options: null (comment out; default 1D RoPE), "CCA_2DProj", "3D_RoPE", "3D_Sinusoidal"
+mixedRoPE3D_configs:
+  rope_theta_3d: 10000.0  # Base frequency for 3D RoPE (point cloud tokens)
+  rope_mixed: True  # Enable mixed RoPE: 3D RoPE for spatial dims, 1D RoPE for temporal dims
+  norm_strategy: "virtual_resolution"  # Point coordinate normalization strategy
+  virtual_resolution: 1.0  # Virtual resolution scaling factor for normalization
+  rope_mixed_learn_per_axis: False  # Learn separate frequencies per axis (x/y/z) vs shared across axes
+  mixedRoPE_3d_learned_axial_mixing_weight: False  # Learn axial mixing weights for 3D RoPE frequencies
+  spatial_temporal_separate_strategy: "half_spatial_half_temp"  # Strategy: split head dims into spatial (3D) and temporal (1D) parts
+  spatial_ratio: 0.5  # Ratio of head dimensions for 3D RoPE (spatial), remaining for 1D RoPE (temporal)
+  mixed_rope_spatial_temporal_interleaved: True  # Interleave spatial/temporal dims vs contiguous blocks [spatial|temporal]
+  self_adapted_drift_normed_point_coords: True  # Enable self-adapted drift adjustment for normalized point coordinates
+  self_adapted_drift_mode: "anchor_wrt_avg_temporal"  # Drift mode: 'anchor_wrt_avg_temporal' (same drift) or 'anchor_wrt_pointwise_temporal' (per-point)
+  
+# media_dir: /data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm # arkitscenes-spatiallm
+
+### method
+do_train: true
+freeze_language_tower: false
+freeze_point_tower: false
+train_proj_only: false
+
+### dataset
+dataset: arkitscenes_train # arkitscenes_train,arkitscenes_val
+dataset_dir: /data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm 
+template: spatiallm_qwen # spatiallm_qwen, spatiallm_llama
+num_bins: 1280
+do_augmentation: false
+random_rotation: true
+cutoff_len: 8192
+overwrite_cache: true
+preprocessing_num_workers: 8
+dataloader_num_workers: 8
+# used for index the data (will use the history ones)
+save_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/saves/arkitscenes # save_dir: saves/arkitscenes
+### output
+# output_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/saves
+# Note: Timestamp auto-appended (e.g., spatiallm_0126_153045). Disable: AUTO_TIMESTAMP_OUTPUT_DIR=0
+output_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/spatiallm
+logging_steps: 10
+save_steps: 500
+overwrite_output_dir: false
+save_total_limit: 5
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-5 # to be more aggressive: try to change the learning rate to 5.0e-5 or 1.0e-4
+num_train_epochs: 10
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+pure_bf16: false
+bf16: false
+fp16: false
+tf32: true
+ddp_timeout: 180000000
+report_to: wandb # choices: [none, wandb, tensorboard, swanlab]
+max_new_tokens: 4096
+
+### eval
+val_size: 0.0001
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 500

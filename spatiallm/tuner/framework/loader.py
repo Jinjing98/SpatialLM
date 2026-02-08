@@ -151,6 +151,11 @@ def load_model(
         config.cca_configs = model_args.cca_configs
         logger.info_rank0(f"[Training] CCA configs set to: {model_args.cca_configs}")
     
+    # JJ: Set mixedRoPE3D_configs in config if specified
+    if hasattr(model_args, 'mixedRoPE3D_configs') and model_args.mixedRoPE3D_configs is not None:
+        config.mixedRoPE3D_configs = model_args.mixedRoPE3D_configs
+        logger.info_rank0(f"[Training] MixedRoPE3D configs set to: {model_args.mixedRoPE3D_configs}")
+    
     # JJ: Handle disable_flash_attn flag
     if hasattr(model_args, 'disable_flash_attn') and model_args.disable_flash_attn:
         # Disable flash attention in point encoder config
@@ -181,6 +186,21 @@ def load_model(
             model = CCASpatialLMQwenForCausalLM.from_pretrained(**init_kwargs)
         
         logger.info_rank0(f"[Training] Loaded CCASpatialLMQwenForCausalLM (original type: {original_model_type})")
+    elif model_args.VLM_PE == "mixedRoPE3D":
+        # JJ: Load MixedRoPE3D model if VLM_PE is mixedRoPE3D
+        from spatiallm.model.spatiallm_qwen_mixedRoPE3d import MixedRoPE3DSpatialLMQwenForCausalLM
+        logger.info_rank0(f"[Training] Using MixedRoPE3D model with VLM_PE={model_args.VLM_PE}")
+        
+        # Change config to MixedRoPE3D type
+        original_model_type = config.model_type
+        config.model_type = "mixedRoPE3d_spatiallm_qwen"
+        
+        if model_args.train_from_scratch:
+            model = MixedRoPE3DSpatialLMQwenForCausalLM(config)
+        else:
+            model = MixedRoPE3DSpatialLMQwenForCausalLM.from_pretrained(**init_kwargs)
+        
+        logger.info_rank0(f"[Training] Loaded MixedRoPE3DSpatialLMQwenForCausalLM (original type: {original_model_type})")
     else:
         # VLM_PE is None - use default model
         logger.info_rank0(f"[Training] Using default model (VLM_PE=None)")

@@ -46,6 +46,25 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
 
     def __init__(self, config):
         super().__init__(config)
+        
+        # JJ: Read MixedRoPE3D configuration early (needed for model initialization)
+        mixedRoPE3D_configs = getattr(config, 'mixedRoPE3D_configs', {})
+        
+        # JJ: Set MixedRoPE3D config attributes on config object for use in rope3dQwen2ForCausallm
+        # Use values from mixedRoPE3D_configs if available, otherwise use existing config attributes or defaults
+        def _get_config_value(key, default):
+            if mixedRoPE3D_configs and key in mixedRoPE3D_configs:
+                return mixedRoPE3D_configs[key]
+            return getattr(config, key, default)
+        
+        config.rope_theta_3d = _get_config_value('rope_theta_3d', 10000.0)
+        config.rope_mixed = _get_config_value('rope_mixed', True)
+        config.norm_strategy = _get_config_value('norm_strategy', 'virtual_resolution')
+        config.virtual_resolution = _get_config_value('virtual_resolution', 1.0)
+        config.rope_mixed_learn_per_axis = _get_config_value('rope_mixed_learn_per_axis', False)
+        config.mixedRoPE_3d_learned_axial_mixing_weight = _get_config_value('mixedRoPE_3d_learned_axial_mixing_weight', False)
+        logger.info(f"[MixedRoPE3D] Configuration: rope_theta_3d={config.rope_theta_3d}, rope_mixed={config.rope_mixed}, norm_strategy={config.norm_strategy}, virtual_resolution={config.virtual_resolution}, rope_mixed_learn_per_axis={config.rope_mixed_learn_per_axis}, mixedRoPE_3d_learned_axial_mixing_weight={config.mixedRoPE_3d_learned_axial_mixing_weight}")
+        
         # JJ: Use our custom Qwen2Model with MixedRoPE3D
         self.model = Qwen2ModelMixedRoPE3D(config)
         self.vocab_size = config.vocab_size

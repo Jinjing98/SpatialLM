@@ -18,17 +18,15 @@ conda activate /data/horse/ws/jixu233b-3d_ws/envs/spatiallm
 module load CUDA/12.4.0
 cd $SLURM_SUBMIT_DIR
 
-DATA_ROOT='/data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm/'
 
 export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29500
 export NNODES=1
 export NODE_RANK=0
-export NPROC_PER_NODE=4  # Adjust to the number of GPUs available
+export NPROC_PER_NODE=1  # Adjust to the number of GPUs available
 
 
-DATA_ROOT='/data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm/'
-DATA_ROOT='/mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm/'
+
 
 # Experiment name (optional)
 # Usage: EXPNAME="test" bash train.sh
@@ -37,8 +35,9 @@ DATA_ROOT='/mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm/'
 # EXPNAME=${EXPNAME:-""}
 #EXPNAME=${EXPNAME:-"spatiallm_cca_24_adaptedNorm"}
 # EXPNAME=${EXPNAME:-"spatiallm_cca_48_adaptedNorm"}
-EXPNAME=${EXPNAME:-"spatiallm_cca_24_gridsizeNorm"}
+# EXPNAME=${EXPNAME:-"spatiallm_cca_24_gridsizeNorm"}
+EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp6_075_no_drift_leanredMixWeights"}
 
 SPATIALLM_VERBOSE=0 python train.py \
-    configs/spatiallm_sft_cca.yaml \
+    configs/spatiallm_sft_mixedrope3d_exp6.yaml \
     expname="$EXPNAME"
