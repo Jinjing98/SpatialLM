@@ -204,8 +204,13 @@ def get_train_args(
         exp_name = timestamp
     base_output_dir = training_args.output_dir
     training_args.output_dir = os.path.join(base_output_dir, exp_name)
+    
+    # JJ: Set WandB run name to experiment name for better tracking
+    training_args.run_name = exp_name
+    
     logger.info_rank0(f"Experiment name: {exp_name}")
     logger.info_rank0(f"Output directory: {training_args.output_dir}")
+    logger.info_rank0(f"WandB run name: {training_args.run_name}")
     
     can_resume_from_checkpoint = True
 
