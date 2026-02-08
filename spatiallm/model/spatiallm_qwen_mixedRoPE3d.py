@@ -63,7 +63,13 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
         config.virtual_resolution = _get_config_value('virtual_resolution', 1.0)
         config.rope_mixed_learn_per_axis = _get_config_value('rope_mixed_learn_per_axis', False)
         config.mixedRoPE_3d_learned_axial_mixing_weight = _get_config_value('mixedRoPE_3d_learned_axial_mixing_weight', False)
-        logger.info(f"[MixedRoPE3D] Configuration: rope_theta_3d={config.rope_theta_3d}, rope_mixed={config.rope_mixed}, norm_strategy={config.norm_strategy}, virtual_resolution={config.virtual_resolution}, rope_mixed_learn_per_axis={config.rope_mixed_learn_per_axis}, mixedRoPE_3d_learned_axial_mixing_weight={config.mixedRoPE_3d_learned_axial_mixing_weight}")
+        config.spatial_temporal_separate_strategy = _get_config_value('spatial_temporal_separate_strategy', 'half_spatial_half_temp')
+        config.spatial_ratio = _get_config_value('spatial_ratio', 0.5)
+        config.mixed_rope_spatial_temporal_interleaved = _get_config_value('mixed_rope_spatial_temporal_interleaved', True)
+        config.self_adapted_drift_normed_point_coords = _get_config_value('self_adapted_drift_normed_point_coords', False)
+        config.self_adapted_drift_mode = _get_config_value('self_adapted_drift_mode', 'anchor_wrt_avg_temporal')
+        
+        logger.info(f"[MixedRoPE3D] Configuration: rope_theta_3d={config.rope_theta_3d}, rope_mixed={config.rope_mixed}, norm_strategy={config.norm_strategy}, virtual_resolution={config.virtual_resolution}, rope_mixed_learn_per_axis={config.rope_mixed_learn_per_axis}, mixedRoPE_3d_learned_axial_mixing_weight={config.mixedRoPE_3d_learned_axial_mixing_weight}, spatial_ratio={config.spatial_ratio}, interleaved={config.mixed_rope_spatial_temporal_interleaved}, drift={config.self_adapted_drift_normed_point_coords}")
         
         # JJ: Use our custom Qwen2Model with MixedRoPE3D
         self.model = Qwen2ModelMixedRoPE3D(config)
@@ -183,10 +189,14 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
             # Let's use return_coords=True if available
             if hasattr(self.point_backbone, 'forward') and 'return_coords' in self.point_backbone.forward.__code__.co_varnames:
                 encoded_features, grid_coords_normalized = self.point_backbone(input_dict, return_coords=True)
-                # grid_coords_normalized is normalized [0, 1], we need to denormalize
-                # Use reduced_grid_size from encoder
-                grid_coords = grid_coords_normalized * (self.point_backbone.reduced_grid_size - 1)
+                # JJ: grid_coords_normalized is already [0, 1], keep it that way!
+                # MixedRoPE3D's normalize_point_coords_3d expects raw coords and will normalize them
+                # So we scale to virtual_resolution range directly
+                virtual_res = self.config.mixedRoPE3D_configs['virtual_resolution']
+                grid_coords = grid_coords_normalized * virtual_res
+                print(f"[DEBUG] grid_coords range after scaling: [{grid_coords.min().item():.2f}, {grid_coords.max().item():.2f}], virtual_res={virtual_res}")
             else:
+                assert 0, 'disabled...'
                 # Fallback: re-run to get the point structure
                 # This is less efficient but works
                 from spatiallm.model.sonata_encoder import Point
@@ -471,6 +481,39 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
             model_point_coords = None
             model_point_token_mask = None
         
+        # # JJ: Debug - Save critical tensors to file for inspection (only first batch)
+        # if is_prefill_stage and self.training and model_point_coords is not None:
+        #     import json
+        #     import os
+            
+        #     # Only save once to avoid spam
+        #     debug_file = "mixedRoPE3d_debug_prefill.json"
+        #     if not os.path.exists(debug_file):
+        #         debug_info = {
+        #             "input_ids": {
+        #                 "shape": list(input_ids.shape) if input_ids is not None else None,
+        #                 "min": int(input_ids.min().item()) if input_ids is not None else None,
+        #                 "max": int(input_ids.max().item()) if input_ids is not None else None,
+        #             },
+        #             "point_coords": {
+        #                 "shape": list(model_point_coords.shape) if model_point_coords is not None else None,
+        #                 "min": [float(model_point_coords[:, i].min().item()) for i in range(3)] if model_point_coords is not None else None,
+        #                 "max": [float(model_point_coords[:, i].max().item()) for i in range(3)] if model_point_coords is not None else None,
+        #             },
+        #             "vocab_size": self.config.vocab_size,
+        #         }
+                
+        #         if labels is not None:
+        #             valid_labels = labels[labels != -100]
+        #             if valid_labels.numel() > 0:
+        #                 debug_info["labels"] = {
+        #                     "min_valid": int(valid_labels.min().item()),
+        #                     "max_valid": int(valid_labels.max().item()),
+        #                 }
+                
+        #         with open(debug_file, 'w') as f:
+        #             json.dump(debug_info, f, indent=2)
+        
         outputs = self.model(
             input_ids=None,
             attention_mask=attention_mask,# only have dim of text_token_dim+accu_next_text_token_dim 1 during net token gen.. The attn for pcd does not saved here during net token gen.
@@ -526,6 +569,16 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
             assert (
                 labels.shape[1] == logits.shape[1]
             ), "The length of labels and logits should be the same"
+            
+            # JJ: Debug - Validate labels before loss calculation
+            if self.training:
+                valid_labels = labels[labels != IGNORE_INDEX]
+                if valid_labels.numel() > 0:
+                    if (valid_labels < 0).any() or (valid_labels >= self.config.vocab_size).any():
+                        print(f"[ERROR] Invalid labels detected!")
+                        print(f"  labels min: {valid_labels.min().item()}, max: {valid_labels.max().item()}")
+                        print(f"  vocab_size: {self.config.vocab_size}")
+                        print(f"  out_of_range_count: {((valid_labels < 0) | (valid_labels >= self.config.vocab_size)).sum().item()}")
 
             loss = self.loss_function(
                 logits=logits,

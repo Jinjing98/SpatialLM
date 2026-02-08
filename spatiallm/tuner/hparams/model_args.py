@@ -77,7 +77,8 @@ class BaseModelArguments:
         },
     )
     low_cpu_mem_usage: bool = field(
-        default=True,
+        # default=True,
+        default=False, # JJ HACK
         metadata={"help": "Whether or not to use memory-efficient model loading."},
     )
     rope_scaling: Optional[RopeScaling] = field(
