@@ -67,7 +67,7 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
             # Point tokens: upper half for 3D RoPE (spatial), lower half for 1D RoPE (temporal)
             # self.spatial_ratio = 0.0 # endless repeat digits
             # self.spatial_ratio = 0.25  # endless repeat digits
-            self.spatial_ratio = 0.5  # endless repeat digits
+            self.spatial_ratio = getattr(config, 'spatial_ratio', 0.75)
             # self.spatial_ratio = 0.75  # varooes a bit in the begining, then endless
             # self.spatial_ratio = 1.0 #dless repeat digits
             self.temporal_ratio = (1 - self.spatial_ratio)  # we force the later part for temporal
@@ -94,6 +94,7 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
             self.compute_cis_3d = partial(compute_mixed_cis_3d, num_heads=self.num_heads)
             
             # Initialize frequencies for Q (num_attention_heads)
+            # JJ: Do NOT specify device - let PyTorch handle device placement automatically
             freqs_base_3d_q = init_3d_freqs_unified(
                 dim=self.spatial_dim,
                 num_heads=self.num_heads,  # 14 for Qwen2-0.5B
@@ -132,6 +133,7 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
             
             # Initialize axial mixing weights (for spatial dimensions only)
             # JJ: Also separate for Q and K/V
+            # Do NOT specify device - let PyTorch handle device placement automatically
             if self.mixedRoPE_3d_learned_axial_mixing_weight:
                 num_freq_bins_3d = self.spatial_dim // 2
                 # Q axial weights
@@ -441,16 +443,18 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
                 spatial_idx = self.spatial_indices.to(q_point.device)
                 temporal_idx = self.temporal_indices.to(q_point.device)
                 
-                q_point_spatial = q_point[:, :, :, spatial_idx]  # [B, num_heads, N_point, spatial_dim]
-                q_point_temporal = q_point[:, :, :, temporal_idx]  # [B, num_heads, N_point, temporal_dim]
-                k_point_spatial = k_point[:, :, :, spatial_idx]   # [B, num_key_value_heads, N_point, spatial_dim]
-                k_point_temporal = k_point[:, :, :, temporal_idx]  # [B, num_key_value_heads, N_point, temporal_dim]
+                # JJ: IMPORTANT - Add .contiguous() to fix backward pass gather index errors
+                q_point_spatial = q_point[:, :, :, spatial_idx].contiguous()  # [B, num_heads, N_point, spatial_dim]
+                q_point_temporal = q_point[:, :, :, temporal_idx].contiguous()  # [B, num_heads, N_point, temporal_dim]
+                k_point_spatial = k_point[:, :, :, spatial_idx].contiguous()   # [B, num_key_value_heads, N_point, spatial_dim]
+                k_point_temporal = k_point[:, :, :, temporal_idx].contiguous()  # [B, num_key_value_heads, N_point, temporal_dim]
             else:
                 # Contiguous mode: first spatial_dim for spatial, rest for temporal
-                q_point_spatial = q_point[:, :, :, :self.spatial_dim]  # [B, num_heads, N_point, spatial_dim]
-                q_point_temporal = q_point[:, :, :, self.spatial_dim:]  # [B, num_heads, N_point, temporal_dim]
-                k_point_spatial = k_point[:, :, :, :self.spatial_dim]   # [B, num_key_value_heads, N_point, spatial_dim]
-                k_point_temporal = k_point[:, :, :, self.spatial_dim:]  # [B, num_key_value_heads, N_point, temporal_dim]
+                # JJ: IMPORTANT - Add .contiguous() to fix backward pass gather index errors
+                q_point_spatial = q_point[:, :, :, :self.spatial_dim].contiguous()  # [B, num_heads, N_point, spatial_dim]
+                q_point_temporal = q_point[:, :, :, self.spatial_dim:].contiguous()  # [B, num_heads, N_point, temporal_dim]
+                k_point_spatial = k_point[:, :, :, :self.spatial_dim].contiguous()   # [B, num_key_value_heads, N_point, spatial_dim]
+                k_point_temporal = k_point[:, :, :, self.spatial_dim:].contiguous()  # [B, num_key_value_heads, N_point, temporal_dim]
             
             # Apply 3D RoPE to spatial dimensions with GQA-aware freqs
             q_point_spatial_rotated, _ = apply_rotary_emb_3d(q_point_spatial, q_point_spatial, freqs_cis_3d_q)
@@ -465,21 +469,21 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
                 if cos.dim() == 3:  # [B, seq_len, head_dim]
                     if self.mixed_rope_spatial_temporal_interleaved:
                         temporal_idx = self.temporal_indices.to(cos.device)
-                        cos_point = cos[:, point_indices, :][:, :, temporal_idx]  # [B, N_point, temporal_dim]
-                        sin_point = sin[:, point_indices, :][:, :, temporal_idx]
+                        cos_point = cos[:, point_indices, :][:, :, temporal_idx].contiguous()  # [B, N_point, temporal_dim]
+                        sin_point = sin[:, point_indices, :][:, :, temporal_idx].contiguous()
                     else:
-                        cos_point = cos[:, point_indices, self.spatial_dim:]  # [B, N_point, temporal_dim]
-                        sin_point = sin[:, point_indices, self.spatial_dim:]
+                        cos_point = cos[:, point_indices, self.spatial_dim:].contiguous()  # [B, N_point, temporal_dim]
+                        sin_point = sin[:, point_indices, self.spatial_dim:].contiguous()
                     cos_point = cos_point.unsqueeze(1)  # [B, 1, N_point, temporal_dim]
                     sin_point = sin_point.unsqueeze(1)
                 else:
                     if self.mixed_rope_spatial_temporal_interleaved:
                         temporal_idx = self.temporal_indices.to(cos.device)
-                        cos_point = cos[..., temporal_idx]
-                        sin_point = sin[..., temporal_idx]
+                        cos_point = cos[..., temporal_idx].contiguous()
+                        sin_point = sin[..., temporal_idx].contiguous()
                     else:
-                        cos_point = cos[..., self.spatial_dim:]
-                        sin_point = sin[..., self.spatial_dim:]
+                        cos_point = cos[..., self.spatial_dim:].contiguous()
+                        sin_point = sin[..., self.spatial_dim:].contiguous()
                 
                 # Apply 1D RoPE to temporal dimensions
                 q_point_temporal_rotated = (q_point_temporal * cos_point) + (self._rotate_half(q_point_temporal) * sin_point)
