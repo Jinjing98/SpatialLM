@@ -36,8 +36,8 @@ DATA_ROOT='/mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm/'
 # - If set: output_dir will be {base_dir}/{EXPNAME}_MMDDHHMM
 # EXPNAME=${EXPNAME:-""}
 #EXPNAME=${EXPNAME:-"spatiallm_cca_24_adaptedNorm"}
-EXPNAME=${EXPNAME:-"spatiallm_cca_48_adaptedNorm"}
-#EXPNAME=${EXPNAME:-"spatiallm_cca_24_gridsizeNorm"}
+# EXPNAME=${EXPNAME:-"spatiallm_cca_48_adaptedNorm"}
+EXPNAME=${EXPNAME:-"spatiallm_cca_24_gridsizeNorm"}
 
 SPATIALLM_VERBOSE=0 python train.py \
     configs/spatiallm_sft_cca.yaml \

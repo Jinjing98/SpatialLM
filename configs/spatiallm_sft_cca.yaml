@@ -11,7 +11,7 @@ VLM_PE: "CCA_2DProj"         # Options: null (comment out; default 1D RoPE), "CC
 cca_configs:
   grid_size: 24              # 2D grid size for point cloud projection (e.g., 24x24 = 576 cells)
   projection: "top_down"     # Orthographic projection: "top_down" (XY), "front" (XZ), "side" (YZ)
-  pcd_norm_method: "adaptiveNorm"  # Point cloud normalization: "adaptiveNorm" (min-max of current PC), "gridsizeNorm" (based on grid size)
+  pcd_norm_method: "gridsizeNorm"  # Point cloud normalization: "adaptiveNorm" (min-max of current PC), "gridsizeNorm" (based on grid size)
 
 # media_dir: /data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm # arkitscenes-spatiallm
 
