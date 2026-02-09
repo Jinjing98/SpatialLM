@@ -455,13 +455,9 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
                 freqs_cis_3d_kv = self.compute_cis_3d_kv(t_x=t_x, t_y=t_y, t_z=t_z)
                 
                 # Adjust to match head counts
-                # freqs_cis_3d shape: [num_heads, N_point, spatial_dim//2]
-                if freqs_cis_3d_q.shape[0] != self.num_heads:
-                    # Repeat or slice to match
-                    freqs_cis_3d_q = freqs_cis_3d_q[:self.num_heads] if freqs_cis_3d_q.shape[0] > self.num_heads else freqs_cis_3d_q.repeat(self.num_heads // freqs_cis_3d_q.shape[0] + 1, 1, 1)[:self.num_heads]
-                if freqs_cis_3d_kv.shape[0] != self.num_key_value_heads:
-                    freqs_cis_3d_kv = freqs_cis_3d_kv[:self.num_key_value_heads] if freqs_cis_3d_kv.shape[0] > self.num_key_value_heads else freqs_cis_3d_kv.repeat(self.num_key_value_heads // freqs_cis_3d_kv.shape[0] + 1, 1, 1)[:self.num_key_value_heads]
-            
+                freqs_cis_3d_q = freqs_cis_3d_q.unsqueeze(0).repeat(self.num_heads, 1, 1)  # [num_heads, N_point, dim//2]
+                freqs_cis_3d_kv = freqs_cis_3d_kv.unsqueeze(0).repeat(self.num_key_value_heads, 1, 1)  # [num_key_value_heads, N_point, dim//2]
+
             freqs_cis_3d_q = freqs_cis_3d_q.to(query_states.device)
             freqs_cis_3d_kv = freqs_cis_3d_kv.to(query_states.device)
             # freqs_cis_3d_q: [num_heads, N_point, spatial_dim//2]
