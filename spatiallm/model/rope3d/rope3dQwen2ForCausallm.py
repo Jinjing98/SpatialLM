@@ -280,11 +280,12 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
             )
         else:
             # Standard 1D RoPE for all tokens
-            if position_embeddings is not None:
-                cos, sin = position_embeddings
-                # Apply standard RoPE using rotate_half helper
-                query_states = (query_states * cos) + (self._rotate_half(query_states) * sin)
-                key_states = (key_states * cos) + (self._rotate_half(key_states) * sin)
+            # if position_embeddings is not None:
+            assert position_embeddings is not None, "position_embeddings cannot be None when applying standard RoPE"
+            cos, sin = position_embeddings
+            # Apply standard RoPE using rotate_half helper
+            query_states = (query_states * cos) + (self._rotate_half(query_states) * sin)
+            key_states = (key_states * cos) + (self._rotate_half(key_states) * sin)
         
         # Handle past_key_values caching
         if past_key_values is not None:
@@ -361,9 +362,8 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
             raise ValueError(f"point_coords must be 2D [N_point, 3] or 3D [B, N_point, 3], got shape {point_coords.shape}")
         
         # Validate position_embeddings is not None
-        if position_embeddings is None:
-            raise ValueError("position_embeddings cannot be None when applying mixed RoPE")
-        
+        assert position_embeddings is not None, "position_embeddings cannot be None when applying mixed RoPE"
+
         # JJ: Memory optimization - use empty_like + selective copy instead of full clone
         # This avoids initializing memory we'll overwrite anyway
         query_states_new = torch.empty_like(query_states)
@@ -455,13 +455,9 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
                 freqs_cis_3d_kv = self.compute_cis_3d_kv(t_x=t_x, t_y=t_y, t_z=t_z)
                 
                 # Adjust to match head counts
-                # freqs_cis_3d shape: [num_heads, N_point, spatial_dim//2]
-                if freqs_cis_3d_q.shape[0] != self.num_heads:
-                    # Repeat or slice to match
-                    freqs_cis_3d_q = freqs_cis_3d_q[:self.num_heads] if freqs_cis_3d_q.shape[0] > self.num_heads else freqs_cis_3d_q.repeat(self.num_heads // freqs_cis_3d_q.shape[0] + 1, 1, 1)[:self.num_heads]
-                if freqs_cis_3d_kv.shape[0] != self.num_key_value_heads:
-                    freqs_cis_3d_kv = freqs_cis_3d_kv[:self.num_key_value_heads] if freqs_cis_3d_kv.shape[0] > self.num_key_value_heads else freqs_cis_3d_kv.repeat(self.num_key_value_heads // freqs_cis_3d_kv.shape[0] + 1, 1, 1)[:self.num_key_value_heads]
-            
+                freqs_cis_3d_q = freqs_cis_3d_q.unsqueeze(0).repeat(self.num_heads, 1, 1)  # [num_heads, N_point, dim//2]
+                freqs_cis_3d_kv = freqs_cis_3d_kv.unsqueeze(0).repeat(self.num_key_value_heads, 1, 1)  # [num_key_value_heads, N_point, dim//2]
+
             freqs_cis_3d_q = freqs_cis_3d_q.to(query_states.device)
             freqs_cis_3d_kv = freqs_cis_3d_kv.to(query_states.device)
             # freqs_cis_3d_q: [num_heads, N_point, spatial_dim//2]
@@ -746,7 +742,7 @@ class Qwen2ModelMixedRoPE3D(Qwen2Model):
                 position_ids = position_ids.unsqueeze(0)
             
             # Generate cos, sin for 1D RoPE
-            position_embeddings = self.rotary_emb(inputs_embeds, position_ids)
+            position_embeddings = self.rotary_emb(inputs_embeds, position_ids)# JJ: only use the shape n device info in inputs_embeds
         
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None

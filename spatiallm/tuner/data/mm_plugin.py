@@ -22,7 +22,8 @@ LAYOUT_E_PLACEHOLDER = os.environ.get("LAYOUT_E_PLACEHOLDER", "<|layout_e|>")
 POINT_S_TOKEN = os.environ.get("POINT_S_TOKEN", "<|point_start|>")
 POINT_E_TOKEN = os.environ.get("POINT_E_TOKEN", "<|point_end|>")
 POINT_CLOUD_PLACEHOLDER = os.environ.get("POINT_CLOUD_PLACEHOLDER", "<point_cloud>")
-
+# JJ AVOID OOM WHEN USE MIXED ON H100
+MAX_POINTS_PCD = 200000 #the pool pts number 数量是动态的，取决于点云的空间分布 --observed 1390-3500
 
 class SpatialLMPlugin:
     def __init__(
@@ -84,6 +85,16 @@ class SpatialLMPlugin:
         xyz = point_cloud["coord"]
         color = point_cloud["color"]
         assert len(coord) == len(xyz) == len(color)
+
+        # JJ: Limit max number of points
+        if MAX_POINTS_PCD is not None and len(coord) > MAX_POINTS_PCD:
+            # Random sampling
+            print(f'Prune raw pcd from {len(coord)} to {MAX_POINTS_PCD}')
+            indices = np.random.choice(len(coord), MAX_POINTS_PCD, replace=False)
+            coord = coord[indices]
+            xyz = xyz[indices]
+            color = color[indices]
+
         return np.concatenate([coord, xyz, color], axis=1)
 
     def _regularize_point_clouds(
