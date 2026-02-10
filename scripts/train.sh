@@ -39,6 +39,7 @@ EXPNAME=${EXPNAME:-""}
 # EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp6_075_no_drift_leanredMixWeights"}
 
 SPATIALLM_VERBOSE=0 python train.py \
-    configs/spatiallm_sft_mixedrope3d.yaml \
+    configs/spatiallm_sft_sope.yaml \
+    # configs/spatiallm_sft_mixedrope3d.yaml \
 #    configs/spatiallm_sft.yaml \
     # expname="$EXPNAME"

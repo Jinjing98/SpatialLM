@@ -237,6 +237,12 @@ class ModelArguments(
             "help": "MixedRoPE3D configuration dictionary. Keys: rope_theta_3d (float, default: 10000.0), rope_mixed (bool, default: True), norm_strategy (str, default: 'virtual_resolution'), virtual_resolution (float, default: 1.0), rope_mixed_learn_per_axis (bool, default: False), mixedRoPE_3d_learned_axial_mixing_weight (bool, default: False)."
         },
     )
+    sope_configs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "SOPE (Structured Orientation Positional Encoding) configuration dictionary. Keys: rope_theta_3d (float, default: 10000.0), rope_mixed (bool, default: True), norm_strategy (str, default: 'virtual_resolution'), virtual_resolution (float, default: 1.0), rope_mixed_learn_per_axis (bool, default: False), sope_learned_axial_mixing_weight (bool, default: False)."
+        },
+    )
 
     def __post_init__(self):
         BaseModelArguments.__post_init__(self)
@@ -270,6 +276,42 @@ class ModelArguments(
             self.mixedRoPE3D_configs["rope_mixed_learn_per_axis"] = False
         if "mixedRoPE_3d_learned_axial_mixing_weight" not in self.mixedRoPE3D_configs:
             self.mixedRoPE3D_configs["mixedRoPE_3d_learned_axial_mixing_weight"] = False
+        
+        # Set SOPE default configs if not provided
+        if self.sope_configs is None:
+            self.sope_configs = {}
+        
+        # Coordinate system selection
+        if "sope_coordinate_system" not in self.sope_configs:
+            self.sope_configs["sope_coordinate_system"] = "cartesian"
+        
+        # Cartesian coordinate system defaults
+        if "rope_theta_3d" not in self.sope_configs:
+            self.sope_configs["rope_theta_3d"] = 10000.0
+        if "rope_mixed" not in self.sope_configs:
+            self.sope_configs["rope_mixed"] = True
+        if "norm_strategy" not in self.sope_configs:
+            self.sope_configs["norm_strategy"] = "virtual_resolution"
+        if "virtual_resolution" not in self.sope_configs:
+            self.sope_configs["virtual_resolution"] = 1.0
+        if "rope_mixed_learn_per_axis" not in self.sope_configs:
+            self.sope_configs["rope_mixed_learn_per_axis"] = False
+        if "sope_learned_axial_mixing_weight" not in self.sope_configs:
+            self.sope_configs["sope_learned_axial_mixing_weight"] = False
+        
+        # Spherical coordinate system defaults
+        if "freq_splits" not in self.sope_configs:
+            # Default: split 64-dim head into 4 equal parts
+            self.sope_configs["freq_splits"] = {
+                't': [0, 16],
+                'r': [16, 32],
+                'theta': [32, 48],
+                'phi': [48, 64]
+            }
+        if "spherical_norm_strategy" not in self.sope_configs:
+            self.sope_configs["spherical_norm_strategy"] = "minmax"
+        if "spherical_scale_factor" not in self.sope_configs:
+            self.sope_configs["spherical_scale_factor"] = 22.0
 
     @classmethod
     def copyfrom(cls, source: "Self", **kwargs) -> "Self":

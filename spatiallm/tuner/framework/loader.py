@@ -156,6 +156,11 @@ def load_model(
         config.mixedRoPE3D_configs = model_args.mixedRoPE3D_configs
         logger.info_rank0(f"[Training] MixedRoPE3D configs set to: {model_args.mixedRoPE3D_configs}")
     
+    # JJ: Set sope_configs in config if specified
+    if hasattr(model_args, 'sope_configs') and model_args.sope_configs is not None:
+        config.sope_configs = model_args.sope_configs
+        logger.info_rank0(f"[Training] SOPE configs set to: {model_args.sope_configs}")
+    
     # JJ: Handle disable_flash_attn flag
     if hasattr(model_args, 'disable_flash_attn') and model_args.disable_flash_attn:
         # Disable flash attention in point encoder config
@@ -201,6 +206,21 @@ def load_model(
             model = MixedRoPE3DSpatialLMQwenForCausalLM.from_pretrained(**init_kwargs)
         
         logger.info_rank0(f"[Training] Loaded MixedRoPE3DSpatialLMQwenForCausalLM (original type: {original_model_type})")
+    elif model_args.VLM_PE == "sope":
+        # JJ: Load SOPE model if VLM_PE is sope
+        from spatiallm.model.spatiallm_qwen_sope import SopeSpatialLMQwenForCausalLM
+        logger.info_rank0(f"[Training] Using SOPE model with VLM_PE={model_args.VLM_PE}")
+        
+        # Change config to SOPE type
+        original_model_type = config.model_type
+        config.model_type = "sope_spatiallm_qwen"
+        
+        if model_args.train_from_scratch:
+            model = SopeSpatialLMQwenForCausalLM(config)
+        else:
+            model = SopeSpatialLMQwenForCausalLM.from_pretrained(**init_kwargs)
+        
+        logger.info_rank0(f"[Training] Loaded SopeSpatialLMQwenForCausalLM (original type: {original_model_type})")
     else:
         # VLM_PE is None - use default model
         logger.info_rank0(f"[Training] Using default model (VLM_PE=None)")
