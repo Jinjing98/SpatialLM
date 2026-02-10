@@ -78,7 +78,7 @@ class BaseModelArguments:
     )
     low_cpu_mem_usage: bool = field(
         # default=True,
-        default=False, # JJ FIXME. Now HACK to make sure freq is trainable, while if True, the meta tensor can not be properly inited and lead to insane freqs and Nan during traning. 
+        default=False, # JJ HACK
         metadata={"help": "Whether or not to use memory-efficient model loading."},
     )
     rope_scaling: Optional[RopeScaling] = field(

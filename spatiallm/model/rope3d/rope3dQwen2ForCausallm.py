@@ -43,31 +43,49 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
         self.num_key_value_heads = config.num_key_value_heads
         
         self.rope_theta = config.rope_theta  # For text tokens (1D RoPE)
-        
-        # JJ: Load mixedRoPE3D configs from config
-        rope3d_cfg = config.mixedRoPE3D_configs
-        self.rope_theta_3d = rope3d_cfg['rope_theta_3d']  # For point cloud 3D RoPE
-        self.rope_mixed = rope3d_cfg['rope_mixed']
-        self.norm_strategy = rope3d_cfg['norm_strategy']
-        self.virtual_resolution = rope3d_cfg['virtual_resolution']
-        self.rope_mixed_learn_per_axis = rope3d_cfg['rope_mixed_learn_per_axis']
-        self.mixedRoPE_3d_learned_axial_mixing_weight = rope3d_cfg['mixedRoPE_3d_learned_axial_mixing_weight']
+        self.rope_theta_3d = getattr(config, 'rope_theta_3d', 10000.0)  # For point cloud 3D RoPE
+        self.rope_mixed = getattr(config, 'rope_mixed', True)
+        # self.rope_mixed = getattr(config, 'rope_mixed', False)
+        self.norm_strategy = getattr(config, 'norm_strategy', 'virtual_resolution')
+        self.virtual_resolution = getattr(config, 'virtual_resolution', 1.0)
+        self.rope_mixed_learn_per_axis = getattr(config, 'rope_mixed_learn_per_axis', False)
+        self.mixedRoPE_3d_learned_axial_mixing_weight = getattr(config, 'mixedRoPE_3d_learned_axial_mixing_weight', True)
         
         # JJ: Spatial-temporal separation strategy
-        self.spatial_temporal_separate_strategy = rope3d_cfg['spatial_temporal_separate_strategy']
-        self.mixed_rope_spatial_temporal_interleaved = rope3d_cfg['mixed_rope_spatial_temporal_interleaved']
+        self.spatial_temporal_separate_strategy = getattr(config, 'spatial_temporal_separate_strategy', 'half_spatial_half_temp')
+        self.mixed_rope_spatial_temporal_interleaved = getattr(config, 'mixed_rope_spatial_temporal_interleaved', True)
         
         # JJ: Self-adapted drift for normed point coordinates
-        self.self_adapted_drift_normed_point_coords = rope3d_cfg['self_adapted_drift_normed_point_coords']
+        self.self_adapted_drift_normed_point_coords = getattr(config, 'self_adapted_drift_normed_point_coords', True)
         # JJ: Drift mode - how to compute the drift value
         # - 'anchor_wrt_avg_temporal': use len(point_indices) / 2 (same drift for all points)
         # - 'anchor_wrt_pointwise_temporal': use range(point_indices) (different drift per point)
-        self.self_adapted_drift_mode = rope3d_cfg['self_adapted_drift_mode']
+        self.self_adapted_drift_mode = getattr(config, 'self_adapted_drift_mode', 'anchor_wrt_avg_temporal')
         
         # JJ: Calculate split ratio based on strategy
+        if self.spatial_temporal_separate_strategy == 'half_spatial_half_temp':
             # Point tokens: upper half for 3D RoPE (spatial), lower half for 1D RoPE (temporal)
-        self.spatial_ratio = rope3d_cfg['spatial_ratio']
-        self.temporal_ratio = (1 - self.spatial_ratio)  # we force the later part for temporal
+            # self.spatial_ratio = 0.0 # endless repeat digits
+            # self.spatial_ratio = 0.25  # endless repeat digits
+            self.spatial_ratio = 0.5  # endless repeat digits
+            # self.spatial_ratio = 0.75  # varooes a bit in the begining, then endless
+            # self.spatial_ratio = 1.0 #dless repeat digits
+            self.temporal_ratio = (1 - self.spatial_ratio)  # we force the later part for temporal
+            # JJ FIXME
+            # Enable interleved temporal
+        
+        # TODO: Support other allocation strategies
+        # elif self.spatial_temporal_separate_strategy == 'full_spatial':
+        #     self.spatial_ratio = 1.0
+        #     self.temporal_ratio = 0.0
+        # elif self.spatial_temporal_separate_strategy == 'full_temporal':
+        #     self.spatial_ratio = 0.0
+        #     self.temporal_ratio = 1.0
+        # elif self.spatial_temporal_separate_strategy == 'quarter_spatial_three_quarter_temp':
+        #     self.spatial_ratio = 0.25
+        #     self.temporal_ratio = 0.75
+        else:
+            raise ValueError(f"Unknown spatial_temporal_separate_strategy: {self.spatial_temporal_separate_strategy}")
         
         # Calculate split dimensions
         self.spatial_dim = int(self.head_dim * self.spatial_ratio)  # Dimensions for 3D RoPE
@@ -437,9 +455,13 @@ class MixedRoPE3DQwen2Attention(Qwen2Attention):
                 freqs_cis_3d_kv = self.compute_cis_3d_kv(t_x=t_x, t_y=t_y, t_z=t_z)
                 
                 # Adjust to match head counts
-                freqs_cis_3d_q = freqs_cis_3d_q.unsqueeze(0).repeat(self.num_heads, 1, 1)  # [num_heads, N_point, dim//2]
-                freqs_cis_3d_kv = freqs_cis_3d_kv.unsqueeze(0).repeat(self.num_key_value_heads, 1, 1)  # [num_key_value_heads, N_point, dim//2]
-
+                # freqs_cis_3d shape: [num_heads, N_point, spatial_dim//2]
+                if freqs_cis_3d_q.shape[0] != self.num_heads:
+                    # Repeat or slice to match
+                    freqs_cis_3d_q = freqs_cis_3d_q[:self.num_heads] if freqs_cis_3d_q.shape[0] > self.num_heads else freqs_cis_3d_q.repeat(self.num_heads // freqs_cis_3d_q.shape[0] + 1, 1, 1)[:self.num_heads]
+                if freqs_cis_3d_kv.shape[0] != self.num_key_value_heads:
+                    freqs_cis_3d_kv = freqs_cis_3d_kv[:self.num_key_value_heads] if freqs_cis_3d_kv.shape[0] > self.num_key_value_heads else freqs_cis_3d_kv.repeat(self.num_key_value_heads // freqs_cis_3d_kv.shape[0] + 1, 1, 1)[:self.num_key_value_heads]
+            
             freqs_cis_3d_q = freqs_cis_3d_q.to(query_states.device)
             freqs_cis_3d_kv = freqs_cis_3d_kv.to(query_states.device)
             # freqs_cis_3d_q: [num_heads, N_point, spatial_dim//2]

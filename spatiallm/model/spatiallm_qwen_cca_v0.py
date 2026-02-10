@@ -37,7 +37,6 @@ from spatiallm.model.cca_utils import (
     build_cca_attention_mask,
     project_pointcloud_to_2d_grid,
     analyze_cca_positions,
-    CCA_GRID_SIZE,
 )
 
 
@@ -54,6 +53,9 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
+        # Read CCA configuration early (needed for point backbone initialization)
+        cca_configs = config.cca_configs
+        
         self.point_backbone_type = PointBackboneType(config.point_backbone)
         self.point_backbone = None
         point_config = config.point_config
@@ -85,6 +87,7 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 num_bins=point_config["num_bins"],
                 enable_flash=point_config.get("enable_flash", True),
                 enable_rpe=point_config.get("enable_rpe", False),
+                pcd_norm_method=cca_configs.get('pcd_norm_method', 'adaptiveNorm'),
             )
             embed_channels = point_config["enc_channels"][-1]
         else:
@@ -115,6 +118,12 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 f"but got VLM_PE='{vlm_pe}'. Please set config.VLM_PE='CCA_2DProj'."
             )
         
+        # Store CCA configuration (already read earlier for point backbone initialization)
+        self.cca_grid_size = cca_configs['grid_size']
+        self.cca_projection = cca_configs['projection']
+        self.cca_pcd_norm_method = cca_configs['pcd_norm_method']
+        logger.info(f"[CCA] Configuration: grid_size={self.cca_grid_size}, projection={self.cca_projection}, pcd_norm_method={self.cca_pcd_norm_method}")
+        
         # Initialize CCA structures
         self._cca_concentric_pos = None  # Will be initialized on first use
         self._point_cca_positions = None  # CCA position for each point
@@ -137,16 +146,17 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
         # Project 3D points to 2D grid
         grid_row, grid_col = project_pointcloud_to_2d_grid(
             point_coords_3d,
-            grid_size=CCA_GRID_SIZE
+            grid_size=self.cca_grid_size,
+            projection=self.cca_projection
         )
         
         # Build concentric position matrix (cached for efficiency)
         if self._cca_concentric_pos is None:
             self._cca_concentric_pos = build_concentric_position_matrix(
-                grid_size=CCA_GRID_SIZE,
+                grid_size=self.cca_grid_size,
                 device=device
             )
-            print(f'[CCA] Built concentric position matrix with grid_size={CCA_GRID_SIZE}')
+            print(f'[CCA] Built concentric position matrix with grid_size={self.cca_grid_size}')
         elif self._cca_concentric_pos.device != device:
             # Move to correct device if needed
             self._cca_concentric_pos = self._cca_concentric_pos.to(device)
@@ -198,6 +208,7 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                     concentric_pos=self._point_cca_positions,  # Pass 1D tensor of CCA positions per token
                     device=inputs_embeds.device,
                     seq_len=inputs_embeds.shape[1],  # After embedding fusion
+                    grid_size=self.cca_grid_size,
                     past_key_values=past_key_values
                 )
                 batch_cca_position_ids.append(cca_pos_ids.unsqueeze(0))
@@ -243,7 +254,7 @@ class CCASpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             seq_len=inputs_embeds.shape[1],
             device=inputs_embeds.device,
             dtype=inputs_embeds.dtype,
-            grid_size=CCA_GRID_SIZE
+            grid_size=self.cca_grid_size
         )
         
         return batch_cca_position_ids, cca_attention_mask
