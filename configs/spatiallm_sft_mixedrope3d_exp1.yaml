@@ -16,7 +16,7 @@ mixedRoPE3D_configs:
   spatial_temporal_separate_strategy: "half_spatial_half_temp"  # Strategy: split head dims into spatial (3D) and temporal (1D) parts
   spatial_ratio: 0.75  # Ratio of head dimensions for 3D RoPE (spatial), remaining for 1D RoPE (temporal)
   mixed_rope_spatial_temporal_interleaved: True  # Interleave spatial/temporal dims vs contiguous blocks [spatial|temporal]
-  self_adapted_drift_normed_point_coords: Flase  # Enable self-adapted drift adjustment for normalized point coordinates
+  self_adapted_drift_normed_point_coords: False  # Enable self-adapted drift adjustment for normalized point coordinates
   self_adapted_drift_mode: "anchor_wrt_avg_temporal"  # Drift mode: 'anchor_wrt_avg_temporal' (same drift) or 'anchor_wrt_pointwise_temporal' (per-point)
   
 # media_dir: /data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm # arkitscenes-spatiallm
@@ -34,7 +34,7 @@ template: spatiallm_qwen # spatiallm_qwen, spatiallm_llama
 num_bins: 1280
 do_augmentation: false
 random_rotation: true
-cutoff_len: 4096 #8192 # JJ HACK for mixedRoPE3D_0.75_interleved 4339 will Cause OOM on H100 90GB, 3844 works. We set 4096
+cutoff_len: 8192 #only constrain words
 overwrite_cache: true
 preprocessing_num_workers: 8
 dataloader_num_workers: 8

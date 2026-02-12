@@ -24,7 +24,7 @@ POINT_E_TOKEN = os.environ.get("POINT_E_TOKEN", "<|point_end|>")
 POINT_CLOUD_PLACEHOLDER = os.environ.get("POINT_CLOUD_PLACEHOLDER", "<point_cloud>")
 # JJ AVOID OOM WHEN USE MIXED ON H100
 MAX_POINTS_PCD = 200000 #the pool pts number 数量是动态的，取决于点云的空间分布 --observed 1390-3500
-
+# MAX_POINTS_PCD = None # JJ disable the hack on addresing OOM when train mixedrope3d
 class SpatialLMPlugin:
     def __init__(
         self,

@@ -4,6 +4,8 @@ import os
 
 # Path to your extracted log data
 file_path = "/data/horse/ws/jixu233b-metadata_ws/hpc_out/2758411.out"
+file_path = "/data/horse/ws/jixu233b-metadata_ws/hpc_out/2760820.out"
+file_path = '/data/horse/ws/jixu233b-metadata_ws/hpc_out/2766033.out'
 
 def report_dimension_distribution(path):
     if not os.path.exists(path):
@@ -13,7 +15,8 @@ def report_dimension_distribution(path):
     # Pattern captures the second number inside torch.Size([dim1, dim2, dim3])
     # specifically for freqs_x shape lines
     pattern = r"freqs_x shape:\s+torch\.Size\(\[\d+,\s*(\d+),\s*\d+\]\)"
-    
+    # Pcd coord number before pcd encder torch.Size([74244, 3])
+    # pattern = r"Pcd coord number before pcd encder torch\.Size\(\[\d+,\s*(\d+),\s*\d+\]\)"
     dim2_values = []
 
     try:

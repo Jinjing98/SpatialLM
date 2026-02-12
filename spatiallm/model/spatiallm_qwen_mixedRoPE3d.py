@@ -133,7 +133,7 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
 
     # def forward_point_cloud(self, point_cloud, device, dtype):
     # JJ avoid mixedRoPE OOM when there are too 4300+ pts
-    def forward_point_cloud_with_max_constraint(self, point_cloud, device, dtype, max_num_points):
+    def forward_point_cloud_with_max_constraint(self, point_cloud, device, dtype, max_num_points=None):
         # JJ: Return both embeddings and grid coordinates for MixedRoPE3D
         # Grid coordinates: each token corresponds to a voxel grid cell
         # point cloud has shape (n_points, n_features)
@@ -156,7 +156,7 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
 
             # # JJ mixed3D will OOM if there are 4300+  pts
             num_tokens = grid_coords.shape[0]
-            if num_tokens > max_num_points:
+            if num_tokens > max_num_points and max_num_points is not None:
                 print('Pcd coord number before pcd encder', feats[:, :3].shape)
                 indices = torch.randperm(num_tokens, device=encoded_output.device)[:max_num_points]
                 indices = indices.sort()[0]  # Keep spatial order
@@ -339,6 +339,7 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                 point_feature, point_coords_raw = self.forward_point_cloud_with_max_constraint(
                     point_cloud, inputs_embeds.device, inputs_embeds.dtype,
                     max_num_points=3072, # JJ: avoid OOM for mixedRoPE
+                    # max_num_points=None, # JJ: disable the hack on avoiding OOM for mixedRoPE
                 )
                 point_features.append(point_feature)
                 point_coords_list.append(point_coords_raw)

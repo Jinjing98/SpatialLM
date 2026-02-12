@@ -276,7 +276,7 @@ class Attention(nn.Module):
         return x
 
 
-# JJ: 3D version for point clouds
+# JJ: Not used in our spatiallm
 class RoPEAttention_3D(Attention):
     """Multi-head Attention block with 3D rotary position embeddings for point clouds."""
     def __init__(
