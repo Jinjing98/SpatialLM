@@ -321,8 +321,8 @@ if __name__ == "__main__":
         "--VLM_PE",
         type=str,
         default=None,
-        choices=[None, "CCA_2DProj", "mixedRoPE3D"],
-        help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection",
+        choices=[None, "CCA_2DProj", "mixedRoPE3D", "sope"],
+        help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection, mixedRoPE3D: 3D RoPE with Cartesian coordinates, sope: Spherical Orientation Positional Encoding",
     )
     parser.add_argument(
         "--disable_do_sample",
@@ -422,6 +422,49 @@ if __name__ == "__main__":
         
         # Directly instantiate mixedRoPE3D model and load weights
         model = MixedRoPE3DSpatialLMQwenForCausalLM.from_pretrained(
+            args.model_path,
+            config=config,
+            torch_dtype=getattr(torch, args.inference_dtype),
+            trust_remote_code=True
+        )
+    elif args.VLM_PE == "sope":
+        # Use SOPE model
+        from spatiallm.model.spatiallm_qwen_sope import SopeSpatialLMQwenForCausalLM
+        print(f"[Inference] Using SOPE model with VLM_PE={args.VLM_PE}")
+        print(f"[Inference] Loading SopeSpatialLMQwenForCausalLM...")
+        
+        # Change config to SOPE type
+        config.model_type = "sope_spatiallm_qwen"
+        
+        # JJ: Try to load SOPE configs from config.yaml first, then from model config, finally use defaults
+        # First, try to read from config.yaml
+        sope_configs = load_config_from_yaml(args.model_path, 'sope_configs')
+        if sope_configs:
+            print(f"[Inference] Loaded sope_configs from config.yaml: {sope_configs}")
+            config.sope_configs = sope_configs
+        else:
+            # Finally, use defaults and warn
+            config.sope_configs = {
+                'sope_coordinate_system': 'spherical',
+                'freq_splits': {
+                    't': [0, 16],
+                    'r': [16, 32],
+                    'theta': [32, 48],
+                    'phi': [48, 64]
+                },
+                'spherical_norm_strategy': 'minmax',
+                'spherical_scale_factor': 22.0
+            }
+            print(f"\n{'='*80}")
+            print(f"[WARNING] Could not find 'sope_configs' in config.yaml or model config.")
+            print(f"[WARNING] Using default sope_configs: {config.sope_configs}")
+            print(f"[WARNING] It is YOUR RESPONSIBILITY to verify that these PE hyperparameters")
+            print(f"[WARNING] are compatible with the model provided in model_path!")
+            print(f"[WARNING] Performance may be unexpected if the model was not trained with these settings!")
+            print(f"{'='*80}\n")
+        
+        # Directly instantiate SOPE model and load weights
+        model = SopeSpatialLMQwenForCausalLM.from_pretrained(
             args.model_path,
             config=config,
             torch_dtype=getattr(torch, args.inference_dtype),
