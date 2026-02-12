@@ -33,8 +33,8 @@ train_proj_only: false
 
 ### dataset
 dataset: arkitscenes_train # arkitscenes_train,arkitscenes_val
-# dataset_dir: /data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm 
-dataset_dir: /mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm # arkitscenes-spatiallm
+dataset_dir: /data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm 
+# dataset_dir: /mnt/nct-zfs/TCO-All/SharedDatasets/arkitscenes-spatiallm # arkitscenes-spatiallm
 template: spatiallm_qwen # spatiallm_qwen, spatiallm_llama
 num_bins: 1280
 do_augmentation: false
@@ -44,13 +44,13 @@ overwrite_cache: true
 preprocessing_num_workers: 8
 dataloader_num_workers: 8
 # used for index the data (will use the history ones)
-# save_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/saves/arkitscenes # save_dir: saves/arkitscenes
-save_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/saves/arkitscenes # save_dir: saves/arkitscenes
+save_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/saves/arkitscenes # save_dir: saves/arkitscenes
+# save_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/saves/arkitscenes # save_dir: saves/arkitscenes
 ### output
 # output_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/saves
-output_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatiallm
+# output_dir: /mnt/nct-zfs/TCO-Test/jinjingxu/exps/train/spatiallm
 # Note: Timestamp auto-appended (e.g., spatiallm_0126_153045). Disable: AUTO_TIMESTAMP_OUTPUT_DIR=0
-# output_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/spatiallm
+output_dir: /data/horse/ws/jixu233b-metadata_ws/exps/train/spatiallm
 logging_steps: 10
 save_steps: 500
 # overwrite_output_dir: false
@@ -69,7 +69,7 @@ bf16: false
 fp16: false
 tf32: true
 ddp_timeout: 180000000
-report_to: none # choices: [none, wandb, tensorboard, swanlab]
+report_to: wandb # choices: [none, wandb, tensorboard, swanlab]
 max_new_tokens: 4096
 
 ### eval
