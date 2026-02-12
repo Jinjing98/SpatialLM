@@ -250,68 +250,66 @@ class ModelArguments(
         # Set CCA default configs if not provided
         if self.cca_configs is None:
             self.cca_configs = {}
-        
-        # Apply defaults for missing keys
-        if "grid_size" not in self.cca_configs:
-            self.cca_configs["grid_size"] = 24
-        if "projection" not in self.cca_configs:
-            self.cca_configs["projection"] = "top_down"
-        if "pcd_norm_method" not in self.cca_configs:
-            self.cca_configs["pcd_norm_method"] = "adaptiveNorm"
-        
         # Set MixedRoPE3D default configs if not provided
         if self.mixedRoPE3D_configs is None:
             self.mixedRoPE3D_configs = {}
-        
-        # Apply defaults for missing keys
-        if "rope_theta_3d" not in self.mixedRoPE3D_configs:
-            self.mixedRoPE3D_configs["rope_theta_3d"] = 10000.0
-        if "rope_mixed" not in self.mixedRoPE3D_configs:
-            self.mixedRoPE3D_configs["rope_mixed"] = True
-        if "norm_strategy" not in self.mixedRoPE3D_configs:
-            self.mixedRoPE3D_configs["norm_strategy"] = "virtual_resolution"
-        if "virtual_resolution" not in self.mixedRoPE3D_configs:
-            self.mixedRoPE3D_configs["virtual_resolution"] = 1.0
-        if "rope_mixed_learn_per_axis" not in self.mixedRoPE3D_configs:
-            self.mixedRoPE3D_configs["rope_mixed_learn_per_axis"] = False
-        if "mixedRoPE_3d_learned_axial_mixing_weight" not in self.mixedRoPE3D_configs:
-            self.mixedRoPE3D_configs["mixedRoPE_3d_learned_axial_mixing_weight"] = False
-        
         # Set SOPE default configs if not provided
         if self.sope_configs is None:
             self.sope_configs = {}
+
+        # # ////JJ disable implcit init for unpredictable setting up
+        # # Apply defaults for missing keys
+        # if "grid_size" not in self.cca_configs:
+        #     self.cca_configs["grid_size"] = 24
+        # if "projection" not in self.cca_configs:
+        #     self.cca_configs["projection"] = "top_down"
+        # if "pcd_norm_method" not in self.cca_configs:
+        #     self.cca_configs["pcd_norm_method"] = "adaptiveNorm"
         
-        # Coordinate system selection
-        if "sope_coordinate_system" not in self.sope_configs:
-            self.sope_configs["sope_coordinate_system"] = "cartesian"
+        # # Apply defaults for missing keys
+        # if "rope_theta_3d" not in self.mixedRoPE3D_configs:
+        #     self.mixedRoPE3D_configs["rope_theta_3d"] = 10000.0
+        # if "rope_mixed" not in self.mixedRoPE3D_configs:
+        #     self.mixedRoPE3D_configs["rope_mixed"] = True
+        # if "norm_strategy" not in self.mixedRoPE3D_configs:
+        #     self.mixedRoPE3D_configs["norm_strategy"] = "virtual_resolution"
+        # if "virtual_resolution" not in self.mixedRoPE3D_configs:
+        #     self.mixedRoPE3D_configs["virtual_resolution"] = 1.0
+        # if "rope_mixed_learn_per_axis" not in self.mixedRoPE3D_configs:
+        #     self.mixedRoPE3D_configs["rope_mixed_learn_per_axis"] = False
+        # if "mixedRoPE_3d_learned_axial_mixing_weight" not in self.mixedRoPE3D_configs:
+        #     self.mixedRoPE3D_configs["mixedRoPE_3d_learned_axial_mixing_weight"] = False
         
-        # Cartesian coordinate system defaults
-        if "rope_theta_3d" not in self.sope_configs:
-            self.sope_configs["rope_theta_3d"] = 10000.0
-        if "rope_mixed" not in self.sope_configs:
-            self.sope_configs["rope_mixed"] = True
-        if "norm_strategy" not in self.sope_configs:
-            self.sope_configs["norm_strategy"] = "virtual_resolution"
-        if "virtual_resolution" not in self.sope_configs:
-            self.sope_configs["virtual_resolution"] = 1.0
-        if "rope_mixed_learn_per_axis" not in self.sope_configs:
-            self.sope_configs["rope_mixed_learn_per_axis"] = False
-        if "sope_learned_axial_mixing_weight" not in self.sope_configs:
-            self.sope_configs["sope_learned_axial_mixing_weight"] = False
+        # # Coordinate system selection
+        # if "sope_coordinate_system" not in self.sope_configs:
+        #     self.sope_configs["sope_coordinate_system"] = "cartesian"
         
-        # Spherical coordinate system defaults
-        if "freq_splits" not in self.sope_configs:
-            # Default: split 64-dim head into 4 equal parts
-            self.sope_configs["freq_splits"] = {
-                't': [0, 16],
-                'r': [16, 32],
-                'theta': [32, 48],
-                'phi': [48, 64]
-            }
-        if "spherical_norm_strategy" not in self.sope_configs:
-            self.sope_configs["spherical_norm_strategy"] = "minmax"
-        if "spherical_scale_factor" not in self.sope_configs:
-            self.sope_configs["spherical_scale_factor"] = 22.0
+        # # Cartesian coordinate system defaults
+        # if "rope_theta_3d" not in self.sope_configs:
+        #     self.sope_configs["rope_theta_3d"] = 10000.0
+        # if "rope_mixed" not in self.sope_configs:
+        #     self.sope_configs["rope_mixed"] = True
+        # if "norm_strategy" not in self.sope_configs:
+        #     self.sope_configs["norm_strategy"] = "virtual_resolution"
+        # if "virtual_resolution" not in self.sope_configs:
+        #     self.sope_configs["virtual_resolution"] = 1.0
+        # if "rope_mixed_learn_per_axis" not in self.sope_configs:
+        #     self.sope_configs["rope_mixed_learn_per_axis"] = False
+        # if "sope_learned_axial_mixing_weight" not in self.sope_configs:
+        #     self.sope_configs["sope_learned_axial_mixing_weight"] = False
+        # # Spherical coordinate system defaults
+        # if "freq_splits" not in self.sope_configs:
+        #     # Default: split 64-dim head into 4 equal parts
+        #     self.sope_configs["freq_splits"] = {
+        #         't': [0, 16],
+        #         'r': [16, 32],
+        #         'theta': [32, 48],
+        #         'phi': [48, 64]
+        #     }
+        # if "spherical_norm_strategy" not in self.sope_configs:
+        #     self.sope_configs["spherical_norm_strategy"] = "minmax"
+        # if "spherical_scale_factor" not in self.sope_configs:
+        #     self.sope_configs["spherical_scale_factor"] = 22.0
 
     @classmethod
     def copyfrom(cls, source: "Self", **kwargs) -> "Self":
