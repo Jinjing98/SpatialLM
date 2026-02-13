@@ -183,6 +183,7 @@ class SopeSpatialLMQwenForCausalLM(Qwen2ForCausalLMSope):
                 indices = torch.randperm(num_tokens, device=encoded_features.device)[:max_num_points]
                 indices = indices.sort()[0]  # Keep spatial order
                 encoded_features = encoded_features[indices]
+                grid_coords = grid_coords[indices]  # JJ: clip grid_coords too
                 print(f"[DEBUG] reduced num_tokens from {num_tokens} to {max_num_points}")
 
             # Add the batch dimension
