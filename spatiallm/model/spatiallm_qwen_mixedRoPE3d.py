@@ -131,7 +131,9 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
         # Initialize weights and apply final processing
         self.post_init()
 
-    def forward_point_cloud(self, point_cloud, device, dtype):
+    # def forward_point_cloud(self, point_cloud, device, dtype):
+    # JJ avoid mixedRoPE OOM when there are too 4300+ pts
+    def forward_point_cloud_with_max_constraint(self, point_cloud, device, dtype, max_num_points=None):
         # JJ: Return both embeddings and grid coordinates for MixedRoPE3D
         # Grid coordinates: each token corresponds to a voxel grid cell
         # point cloud has shape (n_points, n_features)
@@ -151,7 +153,17 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
             # JJ: Memory optimization - use return_coords=True to get both embeddings and coords in one pass
             # This avoids running the encoder twice (once for embeddings, once for coords)
             encoded_output, grid_coords = self.point_backbone(pc_sparse_tensor, return_coords=True)
-            
+
+            # # JJ mixed3D will OOM if there are 4300+  pts
+            num_tokens = grid_coords.shape[0]
+            if max_num_points is not None and num_tokens > max_num_points:
+                print('Pcd coord number before pcd encder', feats[:, :3].shape)
+                indices = torch.randperm(num_tokens, device=encoded_output.device)[:max_num_points]
+                indices = indices.sort()[0]  # Keep spatial order
+                encoded_output = encoded_output[indices]
+                grid_coords = grid_coords[indices]
+                print(f"[DEBUG] reduced num_tokens from {num_tokens} to {max_num_points}")
+
             # Extract context (embeddings)
             context = encoded_output["context"]  # [B, N_tokens, C]
             point_embeds = self.point_proj(context.to(dtype))
@@ -167,21 +179,22 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                 "feat": feats.to(device),
                 "batch": torch.zeros(coords.shape[0], dtype=torch.long).to(device),
             }
+            encoded_features, grid_coords_normalized = self.point_backbone(input_dict, return_coords=True)
+            # # JJ mixed3D will OOM if there are 4300+  pts
+            num_tokens = grid_coords_normalized.shape[0]
+            if max_num_points is not None and num_tokens > max_num_points:
+                print('Pcd coord number before pcd encder', feats[:, :3].shape)
+                indices = torch.randperm(num_tokens, device=encoded_features.device)[:max_num_points]
+                indices = indices.sort()[0]  # Keep spatial order
+                encoded_features = encoded_features[indices]
+                grid_coords_normalized = grid_coords_normalized[indices]
+                print(f"[DEBUG] reduced num_tokens from {num_tokens} to {max_num_points}")
             
-            if hasattr(self.point_backbone, 'forward') and 'return_coords' in self.point_backbone.forward.__code__.co_varnames:
-                encoded_features, grid_coords_normalized = self.point_backbone(input_dict, return_coords=True)
-                # JJ: grid_coords_normalized is already [0, 1], keep it that way!
-                # MixedRoPE3D's normalize_point_coords_3d expects raw coords and will normalize them
-                # So we scale to virtual_resolution range directly
-                virtual_res = self.config.mixedRoPE3D_configs['virtual_resolution']
-                grid_coords = grid_coords_normalized * virtual_res
-                print(f"[DEBUG] grid_coords range after scaling: [{grid_coords.min().item():.2f}, {grid_coords.max().item():.2f}], virtual_res={virtual_res}")
-            else:
-                # Fallback: this path should be disabled now
-                raise NotImplementedError(
-                    "Sonata encoder must support return_coords=True parameter. "
-                    "Please update spatiallm/model/sonata_encoder.py to add this feature."
-                )
+            # JJ: grid_coords_normalized is already [0, 1], keep it that way!
+            # MixedRoPE3D's normalize_point_coords_3d expects raw coords and will normalize them
+            # So we scale to virtual_resolution range directly
+            virtual_res = self.config.mixedRoPE3D_configs['virtual_resolution']
+            grid_coords = grid_coords_normalized * virtual_res
             
             # Add the batch dimension
             encoded_features = encoded_features.unsqueeze(0)
@@ -323,11 +336,14 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
             point_features = []
             for i in range(n_point_clouds):  # * iterate over batch
                 point_cloud = point_clouds[i]
-                point_feature, point_coords_raw = self.forward_point_cloud(
-                    point_cloud, inputs_embeds.device, inputs_embeds.dtype
+                point_feature, point_coords_raw = self.forward_point_cloud_with_max_constraint(
+                    point_cloud, inputs_embeds.device, inputs_embeds.dtype,
+                    max_num_points=3072, # JJ: avoid OOM for mixedRoPE
+                    # max_num_points=None, # JJ: disable the hack on avoiding OOM for mixedRoPE
                 )
                 point_features.append(point_feature)
-                point_coords_list.append(point_coords_raw)
+                # point_coords_list.append(point_coords_raw)
+                point_coords_list.append(point_coords_raw.detach()) # JJ: this alone should fix mixedRope OOM ?
 
             # Insert point cloud features into the input ids
             point_start_end_token_pos = []
