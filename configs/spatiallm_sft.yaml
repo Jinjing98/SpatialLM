@@ -5,7 +5,7 @@ trust_remote_code: true
 ### 3D Positional Encoding Configuration (uncomment to enable)
 # pcd_theta: 10000             # Base frequency for 3D PE (default: 10000)
 # disable_flash_attn: false    # Whether to disable flash attention (default: false)
-VLM_PE: "CCA_2DProj"         # Options: null (comment out; default 1D RoPE), "CCA_2DProj", "3D_RoPE", "3D_Sinusoidal"
+# VLM_PE: "CCA_2DProj"         # Options: null (comment out; default 1D RoPE), "CCA_2DProj", "3D_RoPE", "3D_Sinusoidal"
 # media_dir: /data/horse/ws/jixu233b-metadata_ws/datasets/arkitscenes-spatiallm # arkitscenes-spatiallm
 
 ### method

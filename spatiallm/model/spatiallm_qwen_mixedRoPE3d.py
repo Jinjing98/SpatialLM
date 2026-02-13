@@ -156,7 +156,7 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
 
             # # JJ mixed3D will OOM if there are 4300+  pts
             num_tokens = grid_coords.shape[0]
-            if num_tokens > max_num_points and max_num_points is not None:
+            if max_num_points is not None and num_tokens > max_num_points:
                 print('Pcd coord number before pcd encder', feats[:, :3].shape)
                 indices = torch.randperm(num_tokens, device=encoded_output.device)[:max_num_points]
                 indices = indices.sort()[0]  # Keep spatial order
@@ -182,7 +182,7 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
             encoded_features, grid_coords_normalized = self.point_backbone(input_dict, return_coords=True)
             # # JJ mixed3D will OOM if there are 4300+  pts
             num_tokens = grid_coords_normalized.shape[0]
-            if num_tokens > max_num_points:
+            if max_num_points is not None and num_tokens > max_num_points:
                 print('Pcd coord number before pcd encder', feats[:, :3].shape)
                 indices = torch.randperm(num_tokens, device=encoded_features.device)[:max_num_points]
                 indices = indices.sort()[0]  # Keep spatial order
@@ -342,7 +342,8 @@ class MixedRoPE3DSpatialLMQwenForCausalLM(Qwen2ForCausalLMMixedRoPE3D):
                     # max_num_points=None, # JJ: disable the hack on avoiding OOM for mixedRoPE
                 )
                 point_features.append(point_feature)
-                point_coords_list.append(point_coords_raw)
+                # point_coords_list.append(point_coords_raw)
+                point_coords_list.append(point_coords_raw.detach()) # JJ: this alone should fix mixedRope OOM ?
 
             # Insert point cloud features into the input ids
             point_start_end_token_pos = []

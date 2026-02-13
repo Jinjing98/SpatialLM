@@ -98,6 +98,44 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
         # Initialize weights and apply final processing
         self.post_init()
 
+    def forward_point_cloud_with_max_constraint(self, point_cloud, device, dtype, max_num_points=None):
+        # point cloud has shape (n_points, n_features)
+        # find the points that have nan values
+        self.point_backbone.to(torch.float32)
+        nan_mask = torch.isnan(point_cloud).any(dim=1)
+        point_cloud = point_cloud[~nan_mask]
+        coords = point_cloud[:, :3].int()
+        feats = point_cloud[:, 3:].float()
+        if self.point_backbone_type == PointBackboneType.SCENESCRIPT:
+            pc_sparse_tensor = torchsparse.SparseTensor(coords=coords, feats=feats)
+            pc_sparse_tensor = sparse_collate([pc_sparse_tensor])  # batch_size = 1
+            pc_sparse_tensor = pc_sparse_tensor.to(device)
+            encoded_features = self.point_backbone(pc_sparse_tensor)
+            return self.point_proj(encoded_features["context"].to(dtype))
+        elif self.point_backbone_type == PointBackboneType.SONATA:
+            input_dict = {
+                "coord": feats[:, :3].to(device),
+                "grid_coord": coords.to(device),
+                "feat": feats.to(device),
+                "batch": torch.zeros(coords.shape[0], dtype=torch.long).to(device),
+            }
+            encoded_features = self.point_backbone(input_dict)
+
+            # # # JJ: be consistent with mixedrope
+            num_tokens = encoded_features.shape[0]
+            if max_num_points is not None and num_tokens > max_num_points:
+                print('Pcd coord number before pcd encder', feats[:, :3].shape)
+                indices = torch.randperm(num_tokens, device=encoded_features.device)[:max_num_points]
+                indices = indices.sort()[0]  # Keep spatial order
+                encoded_features = encoded_features[indices]
+                print(f"[DEBUG] reduced num_tokens from {num_tokens} to {max_num_points}")
+
+            # add the batch dimension
+            encoded_features = encoded_features.unsqueeze(0)
+            return self.point_proj(encoded_features.to(dtype))
+        else:
+            raise ValueError(f"Unknown point backbone type: {self.point_backbone_type}")
+
     def forward_point_cloud(self, point_cloud, device, dtype):
         # point cloud has shape (n_points, n_features)
         # find the points that have nan values
@@ -251,8 +289,11 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             point_features = []
             for i in range(n_point_clouds):  # * iterate over batch
                 point_cloud = point_clouds[i]
-                point_feature = self.forward_point_cloud(
-                    point_cloud, inputs_embeds.device, inputs_embeds.dtype
+                # point_feature = self.forward_point_cloud(
+                point_feature = self.forward_point_cloud_with_max_constraint(
+                    point_cloud, inputs_embeds.device, inputs_embeds.dtype,
+                    # max_num_points=None, 
+                    max_num_points=3072, # JJ: being consistent with mixedRoPE
                 )
                 point_features.append(point_feature)
 

@@ -36,18 +36,25 @@ export NPROC_PER_NODE=1  # Adjust to the number of GPUs available
 #EXPNAME=${EXPNAME:-"spatiallm_cca_24_adaptedNorm"}
 # EXPNAME=${EXPNAME:-"spatiallm_cca_48_adaptedNorm"}
 # EXPNAME=${EXPNAME:-"spatiallm_cca_24_gridsizeNorm"}
-# EXPNAME=${EXPNAME:-"spatiallm_axialrope3d_exp7_075_MAX_POINTS_PCD200k_MAX3072"}
-EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp6_075_no_drift_leanredMixWeights_MAX_POINTS_PCD200k_MAX3072"}
+# EXPNAME=${EXPNAME:-"spatiallm_sope_native_no_grad"}
+EXPNAME=${EXPNAME:-"spatiallm_sope_native_no_grad_MAX_POINTS_PCD200k_MAX3072"}
+# EXPNAME=${EXPNAME:-"spatiallm_axialrope3d_exp7_075_MAX_POINTS_fallbackthehack_detachPts_fixtypo"}
+# EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp6_075_no_drift_leanredMixWeights_MAX_POINTS_PCD200k_MAX3072"}
 # EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp5_075_no_drift_theta100_MAX_POINTS_PCD200k_MAX3072"}
 # EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp4_075_no_drift_no_interleave_MAX_POINTS_PCD200k_MAX3072"}
 # EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp3_025_no_drift_MAX_POINTS_PCD200k_MAX3072"}
+# EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp3_025_no_drift_detachpts_MAX_POINTS_PCD200k_MAX3072"}
 # EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp2_075_avg_drift_MAX_POINTS_PCD200k_MAX3072"}
 # EXPNAME=${EXPNAME:-"spatiallm_mixedrope3d_exp1_075_no_drift_MAX_POINTS_PCD200k_MAX3072"}
+# EXPNAME=${EXPNAME:-"spatiallm_dft1DRoPE_MAX_POINTS_PCD200k_MAX3072"}
 
-PYTORCH_MAX_POINTS_PCD200k_MAX3072=expandable_segments:True \
+# PYTORCH_MAX_POINTS_PCD200k_MAX3072=expandable_segments:True \
 SPATIALLM_VERBOSE=0 python train.py \
-    configs/spatiallm_sft_mixedrope3d_exp6.yaml \
+    configs/spatiallm_sft_sope.yaml \
     expname="$EXPNAME"
 
+    # configs/spatiallm_sft_mixedrope3d_exp6.yaml \
     # configs/spatiallm_sft_axialrope3d_exp7.yaml \
+    # configs/spatiallm_sft_sope.yaml \
+    # configs/spatiallm_sft.yaml \
 

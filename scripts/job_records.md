@@ -1,4 +1,23 @@
+# 13.Feb
+how us compare to sope? under degrade case: reduceraw_reducesonatapost
+2819958 spatiallm_sope_native_no_grad_MAX_POINTS_PCD200k_MAX3072
 
+
+
+# 12.Feb
+how detach affect mixedrope_best_performance? val loss slightly better
+how does MAX_POINTS_PCD200k_MAX3072 affect spataillm baseline? degrade 1d baseline too
+
+2806744 spatiallm_dft1DRoPE_MAX_POINTS_PCD200k_MAX3072
+2806554 spatiallm_mixedrope3d_exp3_025_no_drift_detachpts_MAX_POINTS_PCD200k_MAX3072 
+
+# 12.Feb
+detach can not address OOM. still 777
+
+2804217 2802310 spatiallm_axialrope3d_exp7_075_MAX_POINTS_fallbackthehack_detachPts_fixtypo
+try fix OOM only by: 
+    point_coords_list.append(point_coords_raw.detach()) # JJ: this alone should fix mixedRope OOM ?
+2806430 2802262(ep2) spatiallm_sope_native_no_grad (wo reduce raw; wo reduce posesonata)
 
 # 09. Feb: reduced raw_pts_200k; encoded pts_3072
 baseline: spatiallm_mixedrope3d_exp3_075_no_drift_MAX_POINTS_PCD400k

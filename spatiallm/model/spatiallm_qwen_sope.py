@@ -124,6 +124,75 @@ class SopeSpatialLMQwenForCausalLM(Qwen2ForCausalLMSope):
         # Initialize weights and apply final processing
         self.post_init()
 
+    def forward_point_cloud_with_max_constraint(self, point_cloud, device, dtype, max_num_points=None):
+        # JJ: Return both embeddings and grid coordinates for SOPE
+        # Grid coordinates: each token corresponds to a voxel grid cell
+        # point cloud has shape (n_points, n_features)
+        
+        # Find and remove NaN values
+        self.point_backbone.to(torch.float32)
+        nan_mask = torch.isnan(point_cloud).any(dim=1)
+        point_cloud = point_cloud[~nan_mask]
+        coords = point_cloud[:, :3].int()
+        feats = point_cloud[:, 3:].float()
+        
+        if self.point_backbone_type == PointBackboneType.SCENESCRIPT:
+            pc_sparse_tensor = torchsparse.SparseTensor(coords=coords, feats=feats)
+            pc_sparse_tensor = sparse_collate([pc_sparse_tensor])  # batch_size = 1
+            pc_sparse_tensor = pc_sparse_tensor.to(device)
+            
+            # JJ: Memory optimization - use return_coords=True to get both embeddings and coords in one pass
+            # This avoids running the encoder twice (once for embeddings, once for coords)
+            encoded_output, grid_coords = self.point_backbone(pc_sparse_tensor, return_coords=True)
+            
+            # Extract context (embeddings)
+            context = encoded_output["context"]  # [B, N_tokens, C]
+            point_embeds = self.point_proj(context.to(dtype))
+            
+            grid_coords = grid_coords[0].float()  # [N_tokens, 3]
+            
+            if max_num_points is not None:
+                raise NotImplementedError
+            
+            return point_embeds, grid_coords.to(device)
+            
+        elif self.point_backbone_type == PointBackboneType.SONATA:
+            input_dict = {
+                "coord": feats[:, :3].to(device),
+                "grid_coord": coords.to(device),
+                "feat": feats.to(device),
+                "batch": torch.zeros(coords.shape[0], dtype=torch.long).to(device),
+            }
+            
+            if hasattr(self.point_backbone, 'forward') and 'return_coords' in self.point_backbone.forward.__code__.co_varnames:
+                encoded_features, grid_coords_normalized = self.point_backbone(input_dict, return_coords=True)
+                # JJ: For SOPE spherical mode, pass normalized coords directly
+                # sope_core_utils will handle conversion to spherical and normalization
+                grid_coords = grid_coords_normalized  # [N_tokens, 3], range [0, 1]
+            else:
+                # Fallback: this path should be disabled now
+                raise NotImplementedError(
+                    "Sonata encoder must support return_coords=True parameter. "
+                    "Please update spatiallm/model/sonata_encoder.py to add this feature."
+                )
+
+            # # # JJ: be consistent with mixedrope
+            num_tokens = encoded_features.shape[0]
+            if max_num_points is not None and num_tokens > max_num_points:
+                print('Pcd coord number before pcd encder', feats[:, :3].shape)
+                indices = torch.randperm(num_tokens, device=encoded_features.device)[:max_num_points]
+                indices = indices.sort()[0]  # Keep spatial order
+                encoded_features = encoded_features[indices]
+                print(f"[DEBUG] reduced num_tokens from {num_tokens} to {max_num_points}")
+
+            # Add the batch dimension
+            encoded_features = encoded_features.unsqueeze(0)
+            point_embeds = self.point_proj(encoded_features.to(dtype))
+            
+            return point_embeds, grid_coords.to(device)
+        else:
+            raise ValueError(f"Unknown point backbone type: {self.point_backbone_type}")
+
     def forward_point_cloud(self, point_cloud, device, dtype):
         # JJ: Return both embeddings and grid coordinates for SOPE
         # Grid coordinates: each token corresponds to a voxel grid cell
@@ -172,7 +241,6 @@ class SopeSpatialLMQwenForCausalLM(Qwen2ForCausalLMSope):
                     "Sonata encoder must support return_coords=True parameter. "
                     "Please update spatiallm/model/sonata_encoder.py to add this feature."
                 )
-            
             # Add the batch dimension
             encoded_features = encoded_features.unsqueeze(0)
             point_embeds = self.point_proj(encoded_features.to(dtype))
@@ -313,8 +381,11 @@ class SopeSpatialLMQwenForCausalLM(Qwen2ForCausalLMSope):
             point_features = []
             for i in range(n_point_clouds):  # * iterate over batch
                 point_cloud = point_clouds[i]
-                point_feature, point_coords_raw = self.forward_point_cloud(
-                    point_cloud, inputs_embeds.device, inputs_embeds.dtype
+                # point_feature, point_coords_raw = self.forward_point_cloud(
+                point_feature, point_coords_raw = self.forward_point_cloud_with_max_constraint(
+                    point_cloud, inputs_embeds.device, inputs_embeds.dtype,
+                    # max_num_points=None, 
+                    max_num_points=3072, # JJ: being consistent with mixedRoPE
                 )
                 point_features.append(point_feature)
                 point_coords_list.append(point_coords_raw)
