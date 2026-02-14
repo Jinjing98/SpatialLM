@@ -321,8 +321,8 @@ if __name__ == "__main__":
         "--VLM_PE",
         type=str,
         default=None,
-        choices=[None, "CCA_2DProj", "mixedRoPE3D", "sope"],
-        help="Positional encoding type for point cloud tokens in LLM. None: standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection, mixedRoPE3D: 3D RoPE with Cartesian coordinates, sope: Spherical Orientation Positional Encoding",
+        choices=[None, "None", "CCA_2DProj", "mixedRoPE3D", "sope"],
+        help="Positional encoding type for point cloud tokens in LLM. None (or 'None'): standard 1D RoPE (default), CCA_2DProj: Concentric Causal Attention with 2D projection, mixedRoPE3D: 3D RoPE with Cartesian coordinates, sope: Spherical Orientation Positional Encoding",
     )
     parser.add_argument(
         "--disable_do_sample",
@@ -331,6 +331,10 @@ if __name__ == "__main__":
         help="Disable sampling and use greedy decoding (deterministic generation)",
     )
     args = parser.parse_args()
+    
+    # JJ: Convert string "None" to Python None for VLM_PE argument
+    if args.VLM_PE == "None":
+        args.VLM_PE = None
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
