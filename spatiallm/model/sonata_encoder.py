@@ -941,7 +941,7 @@ class Sonata(PointModule, PyTorchModelHubMixin):
         context = point["sparse_conv_feat"].features
 
         # Get normalized coordinates of encoded tokens (for CCA projection)
-        print('Self.reduced_grid_size: ', self.reduced_grid_size)
+        # print('Self.reduced_grid_size: ', self.reduced_grid_size)
         # Use actual coordinate range for better spatial distribution in CCA
         grid_coord = point["grid_coord"].float()
         
