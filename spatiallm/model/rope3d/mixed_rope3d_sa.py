@@ -123,6 +123,13 @@ def compute_mixed_cis_3d(
     N = t_x.shape[0]
     # No float 16 for this range
     with torch.cuda.amp.autocast(enabled=False):
+        # JJ: Ensure dtype consistency between coordinates and frequency parameters
+        # Convert coordinates to match freqs dtype (important for inference with BFloat16)
+        target_dtype = freqs.dtype
+        t_x = t_x.to(dtype=target_dtype)
+        t_y = t_y.to(dtype=target_dtype)
+        t_z = t_z.to(dtype=target_dtype)
+        
         # Compute frequency encoding for each dimension
         freqs_x = (t_x.unsqueeze(-1) @ freqs[0].unsqueeze(-2)).view(N, num_heads, -1).permute(1, 0, 2)
         freqs_y = (t_y.unsqueeze(-1) @ freqs[1].unsqueeze(-2)).view(N, num_heads, -1).permute(1, 0, 2)
@@ -163,7 +170,17 @@ def compute_mixed_cis_3d(
             print(f"  freqs_combined range: [{freqs_combined[~torch.isnan(freqs_combined)].min().item() if (~torch.isnan(freqs_combined)).any() else 'all NaN'}, {freqs_combined[~torch.isnan(freqs_combined)].max().item() if (~torch.isnan(freqs_combined)).any() else 'all NaN'}], has NaN: {torch.isnan(freqs_combined).any()}")
         # JJ: KEY OPERATION - Weighted addition combines 3D spatial information
         # Each point's encoding = weighted sum of x/y/z contributions (per freq bin)
+        
+        # JJ: torch.polar does not support BFloat16, convert to float32 for computation
+        original_dtype = freqs_combined.dtype
+        if original_dtype == torch.bfloat16:
+            freqs_combined = freqs_combined.float()
+        
         freqs_cis = torch.polar(torch.ones_like(freqs_combined), freqs_combined)
+        
+        # JJ: Convert back to original dtype if needed
+        if original_dtype == torch.bfloat16:
+            freqs_cis = freqs_cis.to(original_dtype)
         
         # JJ: Debug - check for NaN (only on first occurrence)
         assert not torch.isnan(freqs_cis).any(), f'NaN in freqs_cis! freqs_combined'
@@ -198,9 +215,11 @@ def compute_axial_cis_3d(
     num_freqs_z += left_num_freq
     print(f'[MixedRoPE3D] axial cis 3d: num_freqs_x: {num_freqs_x}, num_freqs_y: {num_freqs_y}, num_freqs_z: {num_freqs_z}')
 
-    freq_indices_x = torch.arange(num_freqs_x, dtype=torch.float32).to(t_x.device)
-    freq_indices_y = torch.arange(num_freqs_y, dtype=torch.float32).to(t_y.device)
-    freq_indices_z = torch.arange(num_freqs_z, dtype=torch.float32).to(t_z.device)
+    # JJ: Use coordinates dtype for frequency computation (important for BFloat16 inference)
+    coord_dtype = t_x.dtype
+    freq_indices_x = torch.arange(num_freqs_x, dtype=coord_dtype).to(t_x.device)
+    freq_indices_y = torch.arange(num_freqs_y, dtype=coord_dtype).to(t_y.device)
+    freq_indices_z = torch.arange(num_freqs_z, dtype=coord_dtype).to(t_z.device)
     freqs_base_x = 1.0 / (theta ** (freq_indices_x / ((dim // 3) // 2)))
     freqs_base_y = 1.0 / (theta ** (freq_indices_y / ((dim // 3) // 2)))
     freqs_base_z = 1.0 / (theta ** (freq_indices_z / ((dim // 3) // 2)))
@@ -210,10 +229,23 @@ def compute_axial_cis_3d(
     freqs_y = torch.outer(t_y, freqs_base_y)
     freqs_z = torch.outer(t_z, freqs_base_z)
 
+    # JJ: torch.polar does not support BFloat16, convert to float32 for computation
+    original_dtype = freqs_x.dtype
+    if original_dtype == torch.bfloat16:
+        freqs_x = freqs_x.float()
+        freqs_y = freqs_y.float()
+        freqs_z = freqs_z.float()
+    
     freqs_cis_x = torch.polar(torch.ones_like(freqs_x), freqs_x)
     freqs_cis_y = torch.polar(torch.ones_like(freqs_y), freqs_y)
     freqs_cis_z = torch.polar(torch.ones_like(freqs_z), freqs_z)
-    return torch.cat([freqs_cis_x, freqs_cis_y, freqs_cis_z], dim=-1)
+    
+    # JJ: Convert back to original dtype if needed
+    result = torch.cat([freqs_cis_x, freqs_cis_y, freqs_cis_z], dim=-1)
+    if original_dtype == torch.bfloat16:
+        result = result.to(original_dtype)
+    
+    return result
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     """
